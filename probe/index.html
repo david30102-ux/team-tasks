@@ -606,7 +606,9 @@
       });
       return navigator.serviceWorker.ready;
     }).then(function (reg) {
-      return messaging.getToken({ vapidKey: CFG.vapidKey, serviceWorkerRegistration: reg });
+      var opts = { serviceWorkerRegistration: reg };
+      if (CFG.vapidKey) opts.vapidKey = CFG.vapidKey;
+      return messaging.getToken(opts);
     }).then(function (token) {
       if (!token) throw new Error('לא התקבל אסימון התראות');
       return api('pushRegister', { token: token, device: deviceLabel });
