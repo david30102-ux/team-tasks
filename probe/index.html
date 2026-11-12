@@ -137,6 +137,37 @@
     <p id="pasteOut" class="out"></p>
   </section>
 
+  <!-- 7. התראות -->
+  <section class="card" id="c-push">
+    <h2>7. התראות לטלפון <span class="badge" data-badge="push"></span></h2>
+    <p class="muted">באייפון: קודם צריך להתקין למסך הבית (שלב 1) ולפתוח מהאייקון. כשתופיע שאלה על התראות, לוחצים "אפשר".</p>
+    <div class="row"><button id="btnPushOn">🔔 הפעלת התראות</button></div>
+    <div id="pushTests" class="hidden">
+      <div class="row">
+        <button id="btnPushNow" class="secondary">התראה עכשיו</button>
+        <button id="btnPushLater" class="secondary">התראה בעוד דקה</button>
+      </div>
+      <p class="muted">"התראה בעוד דקה": לוחצים, סוגרים את האפליקציה לגמרי, ומחכים. כשההתראה מגיעה, לוחצים עליה.</p>
+    </div>
+    <p id="pushOut" class="out"></p>
+  </section>
+
+  <!-- 8. יומן -->
+  <section class="card" id="c-cal">
+    <h2>8. פגישות מיומן Google <span class="badge" data-badge="cal"></span></h2>
+    <p class="muted">משתפים את יומן Google שלכם עם החשבון של העמותה. את השיתוף עושים <b>מהמחשב</b>, כי באפליקציית היומן בטלפון אין את האפשרות:</p>
+    <ol class="steps">
+      <li>נכנסים ל-calendar.google.com ← ⚙️ <b>הגדרות</b>.</li>
+      <li>בצד ימין, תחת "הגדרות של היומנים שלי", בוחרים את היומן עם השם שלכם.</li>
+      <li><b>"שיתוף עם אנשים ספציפיים"</b> ← <b>"הוספת אנשים"</b>.</li>
+      <li>כותבים את הכתובת: <b id="orgEmail">(תופיע אחרי שלב 2)</b></li>
+      <li>בהרשאה בוחרים <b>"הצגת כל פרטי האירוע"</b> ← <b>"שליחה"</b>.</li>
+    </ol>
+    <input id="calEmail" type="text" inputmode="email" dir="ltr" placeholder="כתובת ה-Gmail שלכם" autocomplete="email">
+    <div class="row"><button id="btnCal">בדיקת היומן</button></div>
+    <p id="calOut" class="out"></p>
+  </section>
+
   <!-- סיכום -->
   <section class="card" id="c-sum">
     <h2>סיכום</h2>
@@ -183,11 +214,18 @@
     big: 'קובץ 1MB',
     rec: 'הקלטה',
     cross: 'שמיעת הקלטה ממכשיר אחר',
-    paste: 'הדבקה'
+    paste: 'הדבקה',
+    push: 'הפעלת התראות',
+    pushNow: 'התראה כשהאפליקציה פתוחה',
+    pushBg: 'התראה כשהאפליקציה סגורה',
+    cal: 'יומן Google'
   };
+  // התוצאות נשמרות במכשיר, כדי שהסיכום יישאר גם אחרי סגירה ופתיחה
   var results = {};
+  try { results = JSON.parse(sget('results') || '{}') || {}; } catch (e) { results = {}; }
   function setResult(key, state, text) {
     results[key] = { state: state, text: text || '' };
+    sset('results', JSON.stringify(results));
     var badge = document.querySelector('[data-badge="' + key + '"]');
     if (badge) {
       badge.className = 'badge ' + (state === 'ok' ? 'b-ok' : state === 'bad' ? 'b-bad' : 'b-wait');
@@ -311,9 +349,14 @@
         var avg = Math.round(times.reduce(function (a, b) { return a + b; }, 0) / times.length);
         $('connOut').textContent = 'מחובר ✓ זמן תגובה ממוצע: ' + (avg / 1000).toFixed(1) + ' שניות (' + times.join(', ') + ' אלפיות)';
         setResult('conn', 'ok', 'זמן תגובה ' + (avg / 1000).toFixed(1) + ' שניות');
+        loadOrgEmail();
       });
     })();
   });
+
+  function loadOrgEmail() {
+    api('whoami').then(function (r) { if (r.ok && r.email) $('orgEmail').textContent = r.email; });
+  }
 
   // ---------- כלים לקבצים ----------
   function blobToBase64(blob) {
@@ -519,6 +562,105 @@
     }, 0);
   });
 
+  // ---------- 7. התראות ----------
+  var FB_VER = '10.14.1';
+  var FB = CFG.firebase || {};
+  var messaging = null;
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script'); s.src = src;
+      s.onload = resolve; s.onerror = function () { reject(new Error('לא הצלחתי לטעון את רכיב ההתראות')); };
+      document.head.appendChild(s);
+    });
+  }
+  function loadFirebase() {
+    if (window.firebase && window.firebase.messaging) return Promise.resolve();
+    var base = 'https://www.gstatic.com/firebasejs/' + FB_VER + '/';
+    return loadScript(base + 'firebase-app-compat.js').then(function () { return loadScript(base + 'firebase-messaging-compat.js'); });
+  }
+  function pushLink() { return location.origin + location.pathname + '?pushok=1'; }
+
+  $('btnPushOn').addEventListener('click', function () {
+    if (!FB.apiKey) { $('pushOut').textContent = 'ההתראות עוד לא חוברו. דוד יעדכן.'; return; }
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      var why = (isIOS && !installed) ? 'באייפון צריך קודם להתקין את האפליקציה למסך הבית (שלב 1) ולפתוח אותה מהאייקון.' : 'הדפדפן הזה לא תומך בהתראות.';
+      $('pushOut').textContent = why;
+      setResult('push', 'bad', why);
+      return;
+    }
+    var btn = this; btn.disabled = true;
+    $('pushOut').textContent = 'מבקש אישור…';
+    // את בקשת האישור חייבים לשלוח מיד בלחיצה, אחרת אייפון חוסם אותה
+    var p = Notification.requestPermission();
+    var permP = (p && p.then) ? p : new Promise(function (r) { setTimeout(function () { r(Notification.permission); }, 800); });
+    permP.then(function (perm) {
+      if (perm !== 'granted') throw new Error(perm === 'denied' ? 'ההתראות חסומות. צריך לאפשר אותן בהגדרות הטלפון או הדפדפן.' : 'לא אישרתם התראות.');
+      $('pushOut').textContent = 'מתחבר לשירות ההתראות…';
+      return loadFirebase();
+    }).then(function () {
+      if (!firebase.apps.length) firebase.initializeApp(FB);
+      messaging = firebase.messaging();
+      messaging.onMessage(function () {
+        $('pushOut').textContent = 'התקבלה התראה ✓ (כשהאפליקציה פתוחה)';
+        setResult('pushNow', 'ok', 'התקבלה');
+      });
+      return navigator.serviceWorker.ready;
+    }).then(function (reg) {
+      return messaging.getToken({ vapidKey: CFG.vapidKey, serviceWorkerRegistration: reg });
+    }).then(function (token) {
+      if (!token) throw new Error('לא התקבל אסימון התראות');
+      return api('pushRegister', { token: token, device: deviceLabel });
+    }).then(function (r) {
+      if (!r.ok) throw new Error(errText(r));
+      btn.disabled = false;
+      $('pushOut').textContent = 'ההתראות הופעלו ✓ עכשיו נסו את שתי הבדיקות.';
+      $('pushTests').classList.remove('hidden');
+      setResult('push', 'ok', 'הופעלו');
+    }).catch(function (e) {
+      btn.disabled = false;
+      $('pushOut').textContent = 'לא הצליח: ' + e.message;
+      setResult('push', 'bad', e.message);
+    });
+  });
+
+  $('btnPushNow').addEventListener('click', function () {
+    $('pushOut').textContent = 'שולח…';
+    api('pushTest', { device: deviceLabel, delay: 0, link: pushLink() }).then(function (r) {
+      if (!r.ok) { $('pushOut').textContent = errText(r); setResult('pushNow', 'bad', errText(r)); return; }
+      $('pushOut').textContent = 'נשלחה. אמורה להגיע תוך כמה שניות.';
+      setTimeout(function () {
+        if (!results.pushNow || results.pushNow.state !== 'ok') $('pushOut').textContent = 'נשלחה, אבל עוד לא הגיעה לכאן. אם הופיעה התראה בטלפון, זה בסדר.';
+      }, 15000);
+    });
+  });
+
+  $('btnPushLater').addEventListener('click', function () {
+    api('pushTest', { device: deviceLabel, delay: 60, link: pushLink() }).then(function (r) {
+      if (!r.ok) { $('pushOut').textContent = errText(r); setResult('pushBg', 'bad', errText(r)); return; }
+      $('pushOut').textContent = 'ההתראה תישלח בעוד דקה או שתיים. סגרו עכשיו את האפליקציה לגמרי, וכשההתראה תגיע, לחצו עליה.';
+      setResult('pushBg', 'wait', 'נשלחה, מחכים שתגיע');
+    });
+  });
+
+  // ---------- 8. יומן ----------
+  $('calEmail').value = sget('calEmail') || '';
+  $('btnCal').addEventListener('click', function () {
+    var email = $('calEmail').value.trim();
+    sset('calEmail', email);
+    $('calOut').textContent = 'בודק…';
+    api('calendar', { email: email }).then(function (r) {
+      if (!r.ok) {
+        var msg = r.error === 'calendar_not_shared' ? 'היומן עוד לא שותף עם חשבון העמותה. אם בדיוק שיתפתם, חכו דקה ונסו שוב.'
+          : r.error === 'bad_email' ? 'הכתובת לא תקינה.' : errText(r);
+        $('calOut').textContent = msg; setResult('cal', 'bad', msg); return;
+      }
+      var lines = ['מחובר ✓ נמצאו ' + r.count + ' אירועים השבוע.'];
+      (r.sample || []).forEach(function (ev) { lines.push('• ' + (ev.allDay ? 'כל היום' : ev.start) + ' – ' + ev.title); });
+      $('calOut').textContent = lines.join('\n');
+      setResult('cal', 'ok', r.count + ' אירועים השבוע');
+    });
+  });
+
   // ---------- סיכום ----------
   $('btnCopy').addEventListener('click', function () {
     var text = renderSummary();
@@ -534,9 +676,16 @@
 
   // ---------- התחלה ----------
   if (!SERVER) $('noServer').classList.remove('hidden');
+  // פתיחה מתוך לחיצה על התראת הבדיקה
+  if (/[?&]pushok=1/.test(location.search)) {
+    setResult('pushBg', 'ok', 'הגיעה כשהאפליקציה סגורה, ונפתחה בלחיצה');
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  }
+  // מציגים תוצאות שנשמרו מפעם קודמת
+  Object.keys(results).forEach(function (k) { if (results[k]) setResult(k, results[k].state, results[k].text); });
   renderInstall();
   renderSummary();
-  if (SERVER && sget('key')) loadList();
+  if (SERVER && sget('key')) { loadList(); loadOrgEmail(); }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
 })();
 </script>
