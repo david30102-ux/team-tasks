@@ -172,8 +172,8 @@
   var installed = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 
   var deviceId = sget('deviceId');
-  if (!deviceId) { deviceId = Math.random().toString(36).slice(2, 6); sset('deviceId', deviceId); }
-  var deviceLabel = kind + '·' + deviceId;
+  if (!deviceId || !/^\d{4}$/.test(deviceId)) { deviceId = String(1000 + Math.floor(Math.random() * 9000)); sset('deviceId', deviceId); }
+  var deviceLabel = kind + ' ' + deviceId;
 
   // ---------- תוצאות ----------
   var LABELS = {
@@ -476,11 +476,11 @@
             a.src = URL.createObjectURL(base64ToBlob(g.data, g.mime));
             a.addEventListener('playing', function () {
               status.textContent = 'מתנגן ✓';
-              if (!mine) setResult('cross', 'ok', 'הקלטה מ' + f.device.split('·')[0] + ' (' + f.mime + ') מתנגנת');
+              if (!mine) setResult('cross', 'ok', 'הקלטה מ' + f.device.split(' ')[0] + ' (' + f.mime + ') מתנגנת');
             });
             a.addEventListener('error', function () {
               status.textContent = 'המכשיר לא מצליח לנגן את ההקלטה הזו ✗';
-              if (!mine) setResult('cross', 'bad', 'הקלטה מ' + f.device.split('·')[0] + ' (' + f.mime + ') לא מתנגנת');
+              if (!mine) setResult('cross', 'bad', 'הקלטה מ' + f.device.split(' ')[0] + ' (' + f.mime + ') לא מתנגנת');
             });
             status.textContent = 'לחצו ▶ כדי לשמוע';
             item.appendChild(a);
