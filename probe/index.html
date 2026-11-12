@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>בדיקת משימות</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="בדיקת משימות">
+<meta name="theme-color" content="#1f4e79">
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #ffffff; --text: #1d2125; --muted: #5f6770;
+    --line: #e2ded5; --brand: #1f4e79; --brand-text: #ffffff;
+    --ok: #1e7d3a; --ok-bg: #e5f4e9; --bad: #b3261e; --bad-bg: #fbe9e7;
+    --wait: #8a6d00; --wait-bg: #fff6d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --card: #1f2329; --text: #eceff1; --muted: #a3abb4;
+      --line: #333a42; --brand: #6aa6e0; --brand-text: #0d1b29;
+      --ok: #7fd49a; --ok-bg: #1d3325; --bad: #ff9a8f; --bad-bg: #3a201d;
+      --wait: #f0d06a; --wait-bg: #36301a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    padding: 16px; padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 4px 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 15px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; margin: 0 0 14px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 6px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .card p { margin: 6px 0; }
+  .muted { color: var(--muted); font-size: 15px; }
+  .badge { font-size: 14px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+  .b-ok { color: var(--ok); background: var(--ok-bg); }
+  .b-bad { color: var(--bad); background: var(--bad-bg); }
+  .b-wait { color: var(--wait); background: var(--wait-bg); }
+  button, .btn {
+    font: inherit; font-weight: 600; border: 0; border-radius: 12px; padding: 12px 16px;
+    background: var(--brand); color: var(--brand-text); cursor: pointer; min-height: 48px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none;
+  }
+  button.secondary, .btn.secondary { background: transparent; color: var(--brand); border: 2px solid var(--brand); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .row > * { flex: 1 1 auto; }
+  input[type=text], input[type=tel], textarea {
+    font: inherit; width: 100%; padding: 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  textarea { min-height: 80px; resize: vertical; }
+  .out { margin-top: 8px; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .steps { margin: 6px 0; padding-inline-start: 22px; }
+  .steps li { margin: 4px 0; }
+  .rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bad); display: inline-block; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  audio { width: 100%; margin-top: 8px; }
+  .file-item { border-top: 1px solid var(--line); padding: 10px 0; }
+  .file-item:first-child { border-top: 0; }
+  .banner { background: var(--wait-bg); color: var(--wait); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; font-weight: 600; }
+  .hidden { display: none !important; }
+  #summaryText { font-size: 15px; background: var(--bg); border-radius: 10px; padding: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>בדיקת התאמה: כלי המשימות</h1>
+  <p class="sub">הבדיקה הזו בודקת שהכלי יעבוד אצלך בטלפון או במחשב. עוברים שלב אחרי שלב, ובסוף שולחים לדוד את התוצאות.</p>
+
+  <div id="noServer" class="banner hidden">השרת עוד לא חובר. אפשר לעשות כבר עכשיו את שלב 1, ואת השאר אחרי שדוד יעדכן.</div>
+
+  <!-- 1. התקנה -->
+  <section class="card" id="c-install">
+    <h2>1. התקנה למסך הבית <span class="badge" data-badge="install"></span></h2>
+    <p id="deviceLine" class="muted"></p>
+    <div id="installSteps"></div>
+    <div class="row"><button id="btnInstall" class="hidden">התקנת האפליקציה</button></div>
+    <p id="persistLine" class="out"></p>
+  </section>
+
+  <!-- 2. חיבור -->
+  <section class="card" id="c-conn">
+    <h2>2. חיבור לשרת <span class="badge" data-badge="conn"></span></h2>
+    <p class="muted">מקלידים את קוד הבדיקה בן 6 הספרות שקיבלתם מדוד.</p>
+    <input id="keyInput" type="tel" inputmode="numeric" maxlength="6" placeholder="קוד בדיקה" autocomplete="off">
+    <div class="row"><button id="btnPing">בדיקת חיבור</button></div>
+    <p id="connOut" class="out"></p>
+  </section>
+
+  <!-- 3. תמונה -->
+  <section class="card" id="c-photo">
+    <h2>3. תמונה <span class="badge" data-badge="photo"></span></h2>
+    <p class="muted">מצלמים או בוחרים תמונה. היא מוקטנת ונשלחת לשרת.</p>
+    <input id="photoInput" type="file" accept="image/*" class="hidden">
+    <div class="row">
+      <button id="btnPhoto">📷 צילום או בחירת תמונה</button>
+      <button id="btnBig" class="secondary">שליחת קובץ בדיקה של 1MB</button>
+    </div>
+    <p id="photoOut" class="out"></p>
+  </section>
+
+  <!-- 4. הקלטה -->
+  <section class="card" id="c-rec">
+    <h2>4. הקלטה קולית <span class="badge" data-badge="rec"></span></h2>
+    <p class="muted">מקליטים כמה שניות, למשל "בדיקה, בדיקה". ההקלטה נשלחת לשרת אוטומטית.</p>
+    <div class="row"><button id="btnRec">🎤 התחלת הקלטה</button></div>
+    <p id="recOut" class="out"></p>
+    <audio id="recLocal" controls class="hidden"></audio>
+  </section>
+
+  <!-- 5. הקלטות ממכשירים אחרים -->
+  <section class="card" id="c-cross">
+    <h2>5. שמיעת הקלטה ממכשיר אחר <span class="badge" data-badge="cross"></span></h2>
+    <p class="muted">כאן מופיעות הקלטות שנשלחו מכל המכשירים. לוחצים "טעינה" ואז ▶ על הקלטה ממכשיר אחר.</p>
+    <div class="row"><button id="btnList" class="secondary">רענון הרשימה</button></div>
+    <div id="fileList" class="out"></div>
+  </section>
+
+  <!-- 6. הדבקה -->
+  <section class="card" id="c-paste">
+    <h2>6. הדבקה מוואטסאפ <span class="badge" data-badge="paste"></span></h2>
+    <p class="muted">מעתיקים הודעה כלשהי בוואטסאפ (לחיצה ארוכה ואז "העתקה"), חוזרים לכאן ולוחצים "הדבקה".</p>
+    <div class="row"><button id="btnPaste">📋 הדבקה</button></div>
+    <textarea id="pasteBox" placeholder="אפשר גם ללחוץ כאן לחיצה ארוכה ולבחור &quot;הדבק&quot;"></textarea>
+    <p id="pasteOut" class="out"></p>
+  </section>
+
+  <!-- סיכום -->
+  <section class="card" id="c-sum">
+    <h2>סיכום</h2>
+    <p class="muted">כשסיימתם, שלחו את התוצאות לדוד.</p>
+    <div id="summaryText" class="out"></div>
+    <div class="row">
+      <a id="btnWa" class="btn" href="#" target="_blank" rel="noopener">שליחה בוואטסאפ</a>
+      <button id="btnCopy" class="secondary">העתקת התוצאות</button>
+    </div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  'use strict';
+  var CFG = window.PROBE_CONFIG || {};
+  var SERVER = CFG.serverUrl || '';
+
+  // ---------- אחסון במכשיר (עטוף בהגנה, כי לפעמים הוא חסום) ----------
+  function sget(k) { try { return localStorage.getItem('probe.' + k); } catch (e) { return null; } }
+  function sset(k, v) { try { localStorage.setItem('probe.' + k, v); } catch (e) {} }
+
+  function $(id) { return document.getElementById(id); }
+
+  // ---------- זיהוי מכשיר ----------
+  var ua = navigator.userAgent;
+  var isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var isAndroid = /Android/.test(ua);
+  var kind = isIOS ? 'אייפון' : isAndroid ? 'אנדרואיד' : 'מחשב';
+  var iosVer = (ua.match(/OS (\d+)_(\d+)/) || []).slice(1).join('.');
+  var androidVer = (ua.match(/Android (\d+(\.\d+)?)/) || [])[1] || '';
+  var installed = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+
+  var deviceId = sget('deviceId');
+  if (!deviceId) { deviceId = Math.random().toString(36).slice(2, 6); sset('deviceId', deviceId); }
+  var deviceLabel = kind + '·' + deviceId;
+
+  // ---------- תוצאות ----------
+  var LABELS = {
+    install: 'התקנה למסך הבית',
+    conn: 'חיבור לשרת',
+    photo: 'תמונה',
+    big: 'קובץ 1MB',
+    rec: 'הקלטה',
+    cross: 'שמיעת הקלטה ממכשיר אחר',
+    paste: 'הדבקה'
+  };
+  var results = {};
+  function setResult(key, state, text) {
+    results[key] = { state: state, text: text || '' };
+    var badge = document.querySelector('[data-badge="' + key + '"]');
+    if (badge) {
+      badge.className = 'badge ' + (state === 'ok' ? 'b-ok' : state === 'bad' ? 'b-bad' : 'b-wait');
+      badge.textContent = state === 'ok' ? '✓ עובד' : state === 'bad' ? '✗ לא עובד' : 'ממתין';
+    }
+    renderSummary();
+  }
+
+  function renderSummary() {
+    var lines = ['בדיקת כלי המשימות – ' + deviceLabel];
+    lines.push('מכשיר: ' + kind + (iosVer ? ' ' + iosVer : '') + (androidVer ? ' ' + androidVer : '') + (installed ? ' (מותקן)' : ' (בדפדפן)'));
+    Object.keys(LABELS).forEach(function (k) {
+      var r = results[k];
+      var mark = !r ? '⏳' : r.state === 'ok' ? '✅' : r.state === 'bad' ? '❌' : '⏳';
+      lines.push(mark + ' ' + LABELS[k] + (r && r.text ? ': ' + r.text : ''));
+    });
+    var text = lines.join('\n');
+    $('summaryText').textContent = text;
+    $('btnWa').href = 'https://wa.me/?text=' + encodeURIComponent(text);
+    return text;
+  }
+
+  // ---------- 1. התקנה ----------
+  function renderInstall() {
+    $('deviceLine').textContent = 'זוהה: ' + kind +
+      (iosVer ? ' (גרסה ' + iosVer + ')' : '') + (androidVer ? ' (גרסה ' + androidVer + ')' : '') +
+      (installed ? ' · פתוח מהאייקון ✓' : ' · פתוח בדפדפן');
+
+    var html = '';
+    if (installed) {
+      html = '<p>מצוין! האפליקציה פתוחה מהאייקון במסך הבית.</p>';
+    } else if (isIOS) {
+      html = '<ol class="steps"><li>פתחו את הקישור ב<b>ספארי</b> (Safari).</li>' +
+        '<li>לחצו על כפתור השיתוף <b>⬆️</b> (ריבוע עם חץ למעלה, בתחתית המסך).</li>' +
+        '<li>גללו ובחרו <b>"הוסף למסך הבית"</b>, ואז <b>"הוסף"</b>.</li>' +
+        '<li>סגרו את ספארי ופתחו את <b>האייקון החדש</b> במסך הבית.</li></ol>';
+    } else if (isAndroid) {
+      html = '<ol class="steps"><li>פתחו את הקישור ב<b>כרום</b> (Chrome).</li>' +
+        '<li>לחצו על <b>⋮</b> (שלוש נקודות למעלה).</li>' +
+        '<li>בחרו <b>"התקנת אפליקציה"</b> או <b>"הוספה למסך הבית"</b>.</li>' +
+        '<li>פתחו את <b>האייקון החדש</b> במסך הבית.</li></ol>';
+    } else {
+      html = '<ol class="steps"><li>בכרום או ב-Edge: לחצו על סמל ההתקנה בשורת הכתובת (מסך עם חץ), או על הכפתור כאן למטה.</li>' +
+        '<li>פתחו את האפליקציה מהאייקון שנוצר.</li></ol>';
+    }
+    $('installSteps').innerHTML = html;
+
+    // בדיקה שהאפליקציה המותקנת זוכרת דברים בין פתיחות
+    var launchesKey = installed ? 'launchesInstalled' : 'launchesBrowser';
+    var launches = Number(sget(launchesKey) || 0) + 1;
+    sset(launchesKey, String(launches));
+    if (installed) {
+      if (launches > 1) {
+        $('persistLine').textContent = 'האפליקציה זוכרת את המכשיר בין פתיחות ✓ (נפתחה ' + launches + ' פעמים)';
+        setResult('install', 'ok', 'מותקן, וזוכר בין פתיחות');
+      } else {
+        $('persistLine').textContent = 'עוד צעד קטן: סגרו את האפליקציה לגמרי ופתחו אותה שוב מהאייקון, כדי לבדוק שהיא זוכרת.';
+        setResult('install', 'wait', 'מותקן, עוד לא נבדק בפתיחה שנייה');
+      }
+    } else {
+      setResult('install', 'wait', 'עדיין בדפדפן');
+    }
+  }
+
+  var deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (!installed) $('btnInstall').classList.remove('hidden');
+  });
+  $('btnInstall').addEventListener('click', function () {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    deferredPrompt = null;
+    $('btnInstall').classList.add('hidden');
+  });
+
+  // ---------- שרת ----------
+  var ERRORS = {
+    bad_key: 'קוד הבדיקה שגוי.',
+    locked: 'יותר מדי ניסיונות שגויים. חכו 10 דקות ונסו שוב.',
+    not_setup: 'השרת עוד לא הוכן (דוד צריך להריץ setup).',
+    too_big: 'הקובץ גדול מדי.',
+    not_found: 'הקובץ לא נמצא.'
+  };
+  function errText(r) { return ERRORS[r.error] || ('שגיאה: ' + (r.message || r.error || 'לא ידועה')); }
+
+  function api(action, payload) {
+    if (!SERVER) return Promise.resolve({ ok: false, error: 'no_server', message: 'השרת עוד לא חובר' });
+    var body = Object.assign({ action: action, key: sget('key') || '' }, payload || {});
+    var t0 = performance.now();
+    return fetch(SERVER, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body)
+    }).then(function (res) { return res.json(); })
+      .then(function (json) { json._ms = Math.round(performance.now() - t0); return json; })
+      .catch(function (e) { return { ok: false, error: 'network', message: 'אין חיבור לשרת (' + e.message + ')', _ms: Math.round(performance.now() - t0) }; });
+  }
+
+  // ---------- 2. חיבור ----------
+  $('keyInput').value = sget('key') || '';
+  $('btnPing').addEventListener('click', function () {
+    var key = $('keyInput').value.trim();
+    sset('key', key);
+    var btn = this; btn.disabled = true;
+    $('connOut').textContent = 'בודק…';
+    var times = [];
+    var i = 0;
+    (function next() {
+      api('ping').then(function (r) {
+        if (!r.ok) {
+          btn.disabled = false;
+          $('connOut').textContent = errText(r);
+          setResult('conn', 'bad', errText(r));
+          return;
+        }
+        times.push(r._ms);
+        if (++i < 3) return next();
+        btn.disabled = false;
+        var avg = Math.round(times.reduce(function (a, b) { return a + b; }, 0) / times.length);
+        $('connOut').textContent = 'מחובר ✓ זמן תגובה ממוצע: ' + (avg / 1000).toFixed(1) + ' שניות (' + times.join(', ') + ' אלפיות)';
+        setResult('conn', 'ok', 'זמן תגובה ' + (avg / 1000).toFixed(1) + ' שניות');
+      });
+    })();
+  });
+
+  // ---------- כלים לקבצים ----------
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(String(fr.result).split(',')[1] || ''); };
+      fr.onerror = function () { reject(fr.error); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  function base64ToBlob(b64, mime) {
+    var bin = atob(b64), len = bin.length, bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+  function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.round(n / 1024) + 'KB'; }
+
+  function resizeImage(file, max, quality) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        var w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+        var c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? resolve({ blob: b, w: w, h: h }) : reject(new Error('toBlob')); }, 'image/jpeg', quality);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('לא הצלחתי לקרוא את התמונה')); };
+      img.src = url;
+    });
+  }
+
+  function upload(blob, name, mime) {
+    return blobToBase64(blob).then(function (data) {
+      return api('upload', { data: data, name: name, mime: mime, device: deviceLabel });
+    });
+  }
+
+  // ---------- 3. תמונה ----------
+  $('btnPhoto').addEventListener('click', function () { $('photoInput').click(); });
+  $('photoInput').addEventListener('change', function () {
+    var file = this.files && this.files[0];
+    if (!file) return;
+    $('photoOut').textContent = 'מקטין ושולח… (' + kb(file.size) + ' במקור)';
+    resizeImage(file, 1280, 0.8).then(function (res) {
+      return upload(res.blob, 'photo-' + deviceLabel + '.jpg', 'image/jpeg').then(function (r) {
+        if (!r.ok) throw new Error(errText(r));
+        var msg = 'נשלחה ✓ ' + res.w + '×' + res.h + ', ' + kb(res.blob.size) + ', תוך ' + (r._ms / 1000).toFixed(1) + ' שניות';
+        $('photoOut').textContent = msg;
+        setResult('photo', 'ok', kb(res.blob.size) + ' תוך ' + (r._ms / 1000).toFixed(1) + ' שניות');
+      });
+    }).catch(function (e) {
+      $('photoOut').textContent = 'לא הצליח: ' + e.message;
+      setResult('photo', 'bad', e.message);
+    });
+    this.value = '';
+  });
+
+  $('btnBig').addEventListener('click', function () {
+    var btn = this; btn.disabled = true;
+    var size = 1024 * 1024, bytes = new Uint8Array(size);
+    for (var off = 0; off < size; off += 65536) crypto.getRandomValues(bytes.subarray(off, Math.min(off + 65536, size)));
+    $('photoOut').textContent = 'שולח קובץ של 1MB…';
+    upload(new Blob([bytes], { type: 'application/octet-stream' }), 'test-1mb-' + deviceLabel + '.bin', 'application/octet-stream')
+      .then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { $('photoOut').textContent = errText(r); setResult('big', 'bad', errText(r)); return; }
+        $('photoOut').textContent = 'קובץ 1MB נשלח ✓ תוך ' + (r._ms / 1000).toFixed(1) + ' שניות';
+        setResult('big', 'ok', 'תוך ' + (r._ms / 1000).toFixed(1) + ' שניות');
+      });
+  });
+
+  // ---------- 4. הקלטה ----------
+  var CANDIDATES = ['audio/mp4', 'audio/mp4;codecs=mp4a.40.2', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+  function pickMime() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    for (var i = 0; i < CANDIDATES.length; i++) if (MediaRecorder.isTypeSupported(CANDIDATES[i])) return CANDIDATES[i];
+    return '';
+  }
+  function extFor(mime) { return /mp4/.test(mime) ? '.m4a' : /ogg/.test(mime) ? '.ogg' : '.webm'; }
+
+  var rec = null, recStream = null, recChunks = [], recTimer = null, recStart = 0;
+  $('btnRec').addEventListener('click', function () {
+    if (rec && rec.state === 'recording') { rec.stop(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      $('recOut').textContent = 'המכשיר או הדפדפן לא תומכים בהקלטה.';
+      setResult('rec', 'bad', 'אין תמיכה בהקלטה');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      recStream = stream;
+      var mime = pickMime();
+      try { rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+      catch (e) { rec = new MediaRecorder(stream); }
+      recChunks = [];
+      rec.ondataavailable = function (e) { if (e.data && e.data.size) recChunks.push(e.data); };
+      rec.onstop = onRecStop;
+      rec.start();
+      recStart = Date.now();
+      $('btnRec').innerHTML = '<span class="rec-dot"></span> עצירה ושליחה';
+      recTimer = setInterval(function () {
+        var s = Math.round((Date.now() - recStart) / 1000);
+        $('recOut').textContent = 'מקליט… ' + s + ' שניות';
+        if (s >= 60) rec.stop();
+      }, 250);
+    }).catch(function (e) {
+      $('recOut').textContent = 'אין גישה למיקרופון: ' + e.message + '. אם הופיעה שאלה, צריך ללחוץ "אישור".';
+      setResult('rec', 'bad', 'אין גישה למיקרופון (' + e.name + ')');
+    });
+  });
+
+  function onRecStop() {
+    clearInterval(recTimer);
+    if (recStream) recStream.getTracks().forEach(function (t) { t.stop(); });
+    $('btnRec').textContent = '🎤 הקלטה נוספת';
+    var mime = (rec.mimeType || pickMime() || 'audio/webm').split(';')[0];
+    var blob = new Blob(recChunks, { type: mime });
+    var secs = Math.round((Date.now() - recStart) / 1000);
+    var local = $('recLocal');
+    local.src = URL.createObjectURL(blob);
+    local.classList.remove('hidden');
+    $('recOut').textContent = 'הוקלט ' + secs + ' שניות (' + mime + ', ' + kb(blob.size) + '). שולח…';
+    upload(blob, 'rec-' + deviceLabel + extFor(mime), mime).then(function (r) {
+      if (!r.ok) { $('recOut').textContent = 'השליחה נכשלה: ' + errText(r); setResult('rec', 'bad', errText(r)); return; }
+      $('recOut').textContent = 'ההקלטה נשלחה ✓ (' + mime + ', ' + kb(blob.size) + '). אפשר לשמוע אותה כאן למטה.';
+      setResult('rec', 'ok', mime + ', ' + kb(blob.size));
+      loadList();
+    });
+  }
+
+  // ---------- 5. הקלטות ממכשירים אחרים ----------
+  function fmtTime(iso) {
+    try { return new Date(iso).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch (e) { return iso; }
+  }
+  function loadList() {
+    $('fileList').textContent = 'טוען…';
+    api('list').then(function (r) {
+      if (!r.ok) { $('fileList').textContent = errText(r); return; }
+      var recs = r.files.filter(function (f) { return /^audio\//.test(f.mime); });
+      if (!recs.length) { $('fileList').textContent = 'עוד אין הקלטות.'; return; }
+      var box = $('fileList'); box.textContent = '';
+      recs.forEach(function (f) {
+        var mine = f.device === deviceLabel;
+        var item = document.createElement('div'); item.className = 'file-item';
+        var title = document.createElement('div');
+        title.textContent = (mine ? 'ההקלטה שלי' : 'ממכשיר אחר: ' + f.device) + ' · ' + fmtTime(f.created) + ' · ' + f.mime + ' · ' + kb(f.size);
+        var can = document.createElement('div'); can.className = 'muted';
+        var support = document.createElement('audio').canPlayType(f.mime);
+        can.textContent = support ? 'המכשיר אמור לנגן את הפורמט הזה' : 'ייתכן שהמכשיר לא מנגן את הפורמט הזה';
+        var btn = document.createElement('button'); btn.className = 'secondary'; btn.textContent = 'טעינה';
+        var status = document.createElement('div'); status.className = 'out';
+        btn.addEventListener('click', function () {
+          btn.disabled = true; status.textContent = 'טוען…';
+          api('get', { id: f.id }).then(function (g) {
+            if (!g.ok) { status.textContent = errText(g); btn.disabled = false; return; }
+            var a = document.createElement('audio'); a.controls = true; a.preload = 'metadata';
+            a.src = URL.createObjectURL(base64ToBlob(g.data, g.mime));
+            a.addEventListener('playing', function () {
+              status.textContent = 'מתנגן ✓';
+              if (!mine) setResult('cross', 'ok', 'הקלטה מ' + f.device.split('·')[0] + ' (' + f.mime + ') מתנגנת');
+            });
+            a.addEventListener('error', function () {
+              status.textContent = 'המכשיר לא מצליח לנגן את ההקלטה הזו ✗';
+              if (!mine) setResult('cross', 'bad', 'הקלטה מ' + f.device.split('·')[0] + ' (' + f.mime + ') לא מתנגנת');
+            });
+            status.textContent = 'לחצו ▶ כדי לשמוע';
+            item.appendChild(a);
+            btn.classList.add('hidden');
+          });
+        });
+        item.appendChild(title); item.appendChild(can); item.appendChild(btn); item.appendChild(status);
+        box.appendChild(item);
+      });
+    });
+  }
+  $('btnList').addEventListener('click', loadList);
+
+  // ---------- 6. הדבקה ----------
+  $('btnPaste').addEventListener('click', function () {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      $('pasteOut').textContent = 'הכפתור לא נתמך כאן. לחצו לחיצה ארוכה בתיבה ובחרו "הדבק".';
+      setResult('paste', 'wait', 'כפתור לא נתמך, נשאר להדביק ידנית');
+      return;
+    }
+    navigator.clipboard.readText().then(function (t) {
+      if (!t) { $('pasteOut').textContent = 'הזיכרון ריק. העתיקו קודם הודעה בוואטסאפ.'; return; }
+      $('pasteBox').value = t;
+      $('pasteOut').textContent = 'הודבק ✓';
+      setResult('paste', 'ok', 'כפתור ההדבקה עובד');
+    }).catch(function (e) {
+      $('pasteOut').textContent = 'הכפתור נחסם (' + e.name + '). לחצו לחיצה ארוכה בתיבה ובחרו "הדבק".';
+      setResult('paste', 'wait', 'כפתור נחסם, נשאר להדביק ידנית');
+    });
+  });
+  $('pasteBox').addEventListener('paste', function () {
+    setTimeout(function () {
+      if (!$('pasteBox').value) return;
+      var r = results.paste;
+      if (!r || r.state !== 'ok') setResult('paste', 'ok', 'הדבקה ידנית עובדת');
+    }, 0);
+  });
+
+  // ---------- סיכום ----------
+  $('btnCopy').addEventListener('click', function () {
+    var text = renderSummary();
+    var done = function () { $('btnCopy').textContent = 'הועתק ✓'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
+    } else { fallbackCopy(text); done(); }
+  });
+  function fallbackCopy(text) {
+    var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t);
+    t.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(t);
+  }
+
+  // ---------- התחלה ----------
+  if (!SERVER) $('noServer').classList.remove('hidden');
+  renderInstall();
+  renderSummary();
+  if (SERVER && sget('key')) loadList();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+})();
+</script>
+</body>
+</html>
