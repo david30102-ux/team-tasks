@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>משימות צוות</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="משימות">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#1f4e79">
+<style>
+  :root {
+    --bg: #f4f2ed; --card: #ffffff; --text: #1d2125; --muted: #5f6770; --line: #e2ded5;
+    --brand: #1f4e79; --brand-text: #ffffff; --brand-soft: #e3edf7;
+    --ok: #1e7d3a; --ok-bg: #e5f4e9; --bad: #b3261e; --bad-bg: #fbe9e7; --warn: #9a5800; --warn-bg: #fff1dc;
+    --p-high: #d93025; --p-normal: #e3a900; --p-low: #aab0b6;
+    --shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.05);
+    --overlay: rgba(10, 20, 30, .42);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b; --card: #1f2329; --text: #eceff1; --muted: #a3abb4; --line: #333a42;
+      --brand: #6aa6e0; --brand-text: #0d1b29; --brand-soft: #1d2f42;
+      --ok: #7fd49a; --ok-bg: #1d3325; --bad: #ff9a8f; --bad-bg: #3a201d; --warn: #f0c46a; --warn-bg: #36301a;
+      --p-high: #ff7b6e; --p-normal: #f0c040; --p-low: #6c747c;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+      --overlay: rgba(0, 0, 0, .6);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    min-height: 100vh;
+  }
+  body.noscroll { overflow: hidden; }
+  button { font: inherit; color: inherit; }
+  .hidden { display: none !important; }
+
+  /* ---------- כותרת ולשוניות ---------- */
+  .topbar { position: sticky; top: 0; z-index: 5; }
+  .top {
+    background: var(--brand); color: var(--brand-text);
+    padding: max(10px, env(safe-area-inset-top)) 12px 10px 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .top .brandname { font-size: 20px; font-weight: 700; }
+  .top .who { font-size: 15px; opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top .grow { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  .sync { font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 0; cursor: pointer; white-space: nowrap; }
+  .sync.saving { background: rgba(255,255,255,.2); color: inherit; }
+  .sync.offline { background: var(--warn-bg); color: var(--warn); }
+  .sync.nonet { background: rgba(255,255,255,.2); color: inherit; }
+  .icon-btn {
+    background: transparent; border: 0; color: inherit; font-size: 22px; min-width: 44px; min-height: 44px;
+    border-radius: 12px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tabs { display: flex; gap: 6px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .tab {
+    flex: 1; border: 0; background: transparent; color: var(--muted); font-weight: 700; font-size: 16px;
+    padding: 9px 6px; border-radius: 12px; cursor: pointer; min-height: 44px;
+  }
+  .tab.on { background: var(--card); color: var(--brand); box-shadow: var(--shadow); }
+  .tab .count {
+    display: inline-block; min-width: 22px; padding: 0 6px; margin-inline-start: 6px; border-radius: 999px;
+    background: var(--brand-soft); color: var(--brand); font-size: 13px; line-height: 22px;
+  }
+  .banner { background: var(--warn-bg); color: var(--warn); padding: 10px 16px; font-weight: 700; text-align: center; cursor: pointer; }
+
+  /* ---------- רשימות ---------- */
+  main { max-width: 720px; margin: 0 auto; padding: 4px 12px calc(120px + env(safe-area-inset-bottom)); }
+  .sec { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 4px 8px; font-weight: 700; color: var(--muted); font-size: 15px; }
+  .hint { font-weight: 400; font-size: 13px; }
+  .link-btn { background: none; border: 0; color: var(--brand); font-weight: 700; cursor: pointer; padding: 8px 6px; font-size: 15px; }
+  .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .task {
+    position: relative; display: flex; align-items: center; gap: 4px;
+    background: var(--card); border-radius: 14px; padding: 8px 6px 8px 4px; box-shadow: var(--shadow);
+    border-inline-start: 5px solid var(--p-normal); cursor: pointer; min-height: 62px;
+  }
+  .task.p-high { border-inline-start-color: var(--p-high); }
+  .task.p-low { border-inline-start-color: var(--p-low); }
+  .task.is-done, .task.is-cancelled { border-inline-start-color: var(--line); }
+  .check { flex: none; width: 46px; height: 46px; border: 0; background: transparent; padding: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .check .ring {
+    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--muted); display: flex;
+    align-items: center; justify-content: center; font-size: 17px; font-weight: 700; color: #fff;
+  }
+  .check:hover .ring { border-color: var(--ok); }
+  .task.is-done .ring { background: var(--ok); border-color: var(--ok); }
+  .task.is-cancelled .ring { border-style: dashed; }
+  .body { flex: 1; min-width: 0; padding: 2px 0; }
+  .ttl { font-weight: 600; overflow-wrap: anywhere; }
+  .task.is-done .ttl, .task.is-cancelled .ttl { text-decoration: line-through; color: var(--muted); font-weight: 500; }
+  .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 2px; font-size: 14px; color: var(--muted); }
+  .chip { white-space: nowrap; }
+  .chip.urgent { color: var(--p-high); font-weight: 700; }
+  .chip.late { color: var(--bad); font-weight: 700; }
+  .chip.today { color: var(--brand); font-weight: 700; }
+  .chip.okc { color: var(--ok); }
+  .chip.pend { color: var(--warn); font-weight: 700; }
+  .age-orange { color: var(--warn); font-weight: 600; }
+  .age-red { color: var(--bad); font-weight: 600; }
+  .handle {
+    flex: none; width: 42px; height: 46px; border: 0; background: transparent; color: var(--muted);
+    font-size: 24px; cursor: grab; touch-action: none; display: flex; align-items: center; justify-content: center;
+  }
+  .task.dragging { z-index: 3; box-shadow: 0 10px 28px rgba(0,0,0,.22); }
+  .list.drag-on .task:not(.dragging) { transition: transform .15s ease; }
+  .empty { text-align: center; color: var(--muted); padding: 36px 16px; }
+  .empty .big { font-size: 40px; }
+
+  /* ---------- צוות ---------- */
+  .people { display: flex; flex-direction: column; gap: 8px; }
+  .person {
+    display: flex; align-items: center; gap: 12px; background: var(--card); border-radius: 14px;
+    padding: 12px 14px; box-shadow: var(--shadow); cursor: pointer; border: 0; width: 100%; text-align: start;
+  }
+  .person.off { opacity: .55; }
+  .avatar {
+    flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--brand-soft); color: var(--brand);
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px;
+  }
+  .person .grow { flex: 1; min-width: 0; }
+  .pname, .stats, .pstatus { display: block; }
+  .pname { font-weight: 700; }
+  .role { font-size: 12px; font-weight: 700; color: var(--brand); background: var(--brand-soft); border-radius: 999px; padding: 1px 8px; margin-inline-start: 8px; }
+  .stats { font-size: 14px; color: var(--muted); }
+  .pstatus { font-size: 14px; color: var(--warn); font-weight: 600; }
+  .chev { color: var(--muted); font-size: 22px; }
+
+  /* ---------- כפתור הוספה ---------- */
+  .fab {
+    position: fixed; inset-inline-end: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 6;
+    width: 62px; height: 62px; border-radius: 50%; border: 0; background: var(--brand); color: var(--brand-text);
+    font-size: 36px; line-height: 1; box-shadow: 0 6px 18px rgba(0,0,0,.25); cursor: pointer;
+  }
+
+  /* ---------- חלון (גיליון תחתון) ---------- */
+  .sheet-wrap { position: fixed; inset: 0; background: var(--overlay); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+  .sheet {
+    background: var(--card); width: 100%; max-width: 640px; max-height: 92vh; overflow: auto; overscroll-behavior: contain;
+    border-radius: 20px 20px 0 0; padding: 14px 16px calc(22px + env(safe-area-inset-bottom));
+  }
+  @media (min-width: 700px) {
+    .sheet-wrap { align-items: flex-start; padding-top: 6vh; }
+    .sheet { border-radius: 20px; max-height: 86vh; padding-bottom: 22px; }
+  }
+  .sheet-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+  .sheet-head h2 { flex: 1; margin: 8px 0 0; font-size: 20px; overflow-wrap: anywhere; }
+  .sheet-head .icon-btn { color: var(--muted); margin-inline-end: -8px; }
+  .field { margin: 14px 0; }
+  .lbl { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; font-weight: 700; }
+  input[type=text], input[type=tel], input[type=date], select, textarea {
+    font: inherit; width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); min-height: 48px;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: transparent; }
+  input.err { outline: 2px solid var(--bad); }
+  textarea { min-height: 84px; resize: vertical; }
+  .title-input { font-size: 19px; font-weight: 600; }
+  .ltr { direction: ltr; text-align: right; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opt {
+    border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px;
+    padding: 7px 14px; font-size: 16px; min-height: 42px; cursor: pointer;
+  }
+  .opt.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); font-weight: 700; }
+  .btn {
+    font-weight: 700; border: 0; border-radius: 12px; padding: 12px 16px; min-height: 50px; cursor: pointer;
+    background: var(--brand); color: var(--brand-text); display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; text-decoration: none; font-size: 17px;
+  }
+  .btn.secondary { background: transparent; color: var(--brand); border: 2px solid var(--brand); }
+  .btn.danger { background: transparent; color: var(--bad); border: 2px solid var(--bad-bg); }
+  .btn.ok { background: var(--ok); color: #fff; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.block { width: 100%; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .actions > * { flex: 1 1 140px; }
+  .info { margin: 8px 0; }
+  .info .k { color: var(--muted); }
+  .status-line { font-weight: 700; margin: 4px 0 10px; }
+  .note-box { background: var(--bg); border-radius: 12px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; }
+  .box { background: var(--bg); border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+  .box h3 { margin: 0 0 6px; font-size: 16px; }
+  .box p { margin: 4px 0; }
+  .steps { margin: 6px 0; padding-inline-start: 22px; }
+  .steps li { margin: 4px 0; }
+  .msg { margin: 10px 0; padding: 10px 12px; border-radius: 12px; font-weight: 600; }
+  .msg.bad { background: var(--bad-bg); color: var(--bad); }
+  .msg.ok { background: var(--ok-bg); color: var(--ok); }
+  .code-big { font-size: 40px; font-weight: 800; letter-spacing: 6px; text-align: center; direction: ltr; margin: 10px 0; color: var(--brand); }
+  .pre { white-space: pre-wrap; background: var(--bg); border-radius: 12px; padding: 10px 12px; font-size: 15px; overflow-wrap: anywhere; }
+  .small { font-size: 14px; color: var(--muted); }
+  .sub-list { margin-top: 8px; }
+  .danger-link { background: none; border: 0; color: var(--bad); font-weight: 600; cursor: pointer; padding: 10px 0; margin-top: 8px; }
+
+  /* ---------- כניסה ---------- */
+  .login { max-width: 460px; margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) 20px 40px; }
+  .login .logo { width: 76px; height: 76px; border-radius: 20px; display: block; margin: 8px auto 12px; }
+  .login h1 { text-align: center; font-size: 24px; margin: 0 0 4px; }
+  .login .lead { text-align: center; color: var(--muted); margin: 0 0 18px; }
+  .code-input { font-size: 30px !important; letter-spacing: 10px; text-align: center; direction: ltr; font-weight: 700; }
+  .pin-input { font-size: 30px !important; letter-spacing: 14px; text-align: center; direction: ltr; -webkit-text-security: disc; }
+  .center { text-align: center; }
+
+  /* ---------- הודעה קופצת ---------- */
+  .toast {
+    position: fixed; bottom: calc(94px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+    background: #22272e; color: #fff; border-radius: 12px; padding: 10px 16px; display: flex; gap: 16px;
+    align-items: center; z-index: 30; max-width: calc(100% - 32px); box-shadow: 0 6px 20px rgba(0,0,0,.3); font-weight: 600;
+  }
+  .toast button { background: none; border: 0; color: #8cc4ff; font-weight: 800; cursor: pointer; padding: 6px 2px; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div id="app" class="hidden">
+  <div class="topbar">
+    <header class="top">
+      <div class="grow"><span class="brandname">משימות</span><span id="who" class="who"></span></div>
+      <button id="syncState" class="sync hidden" type="button"></button>
+      <button id="btnSettings" class="icon-btn" type="button" aria-label="הגדרות">⚙</button>
+    </header>
+    <div id="banner" class="banner hidden"></div>
+    <nav id="tabs" class="tabs" role="tablist"></nav>
+  </div>
+  <main id="view"></main>
+  <button id="fab" class="fab" type="button" aria-label="משימה חדשה">+</button>
+</div>
+
+<div id="login" class="login hidden"></div>
+
+<div id="sheetWrap" class="sheet-wrap hidden">
+  <div id="sheetBox" class="sheet" role="dialog" aria-modal="true"><div id="sheet"></div></div>
+</div>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
