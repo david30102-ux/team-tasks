@@ -263,6 +263,14 @@
     background: var(--bg); color: var(--text); min-height: 48px;
   }
   .repeat-params { margin-top: 8px; }
+  .remind-pick { margin-top: 10px; padding: 10px 12px; background: var(--bg); border-radius: 12px; }
+  .remind-pick .opt { background: var(--card); }
+  .time-pick { display: flex; align-items: center; gap: 8px; direction: ltr; justify-content: flex-end; }
+  .time-pick select { width: 92px; font-size: 22px; font-weight: 700; text-align: center; text-align-last: center; padding: 8px; background: var(--card); }
+  .time-pick select:disabled { opacity: .45; }
+  .time-pick .colon { font-size: 24px; font-weight: 800; }
+  .remind-sum { margin: 10px 0 0; font-weight: 700; color: var(--brand); }
+  .remind-sum.bad { color: var(--bad); }
   .paste-btn { margin-top: -8px; padding-inline-start: 0; }
   .attach { display: flex; gap: 8px; margin: 10px 0; }
   .files { display: flex; flex-wrap: wrap; gap: 10px; }

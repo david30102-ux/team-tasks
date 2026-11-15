@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.0.1';
+  var APP_VERSION = '2.0.2';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -1700,40 +1700,85 @@
   function range(a, b) { var r = []; for (var i = a; i <= b; i++) r.push(i); return r; }
   function nextHour() { var d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1); return pad(d.getHours()) + ':00'; }
 
-  /** שדה תזכורת: בלי / בעוד שעה / מחר 9:00 / בחירת תאריך ושעה. value(): ISO, '' או null (שגיאה). */
+  /** בחירת שעה בשתי רשימות פשוטות (שעה : דקות), במקום בורר השעה של הטלפון. allowNone: אפשרות "בלי". */
+  function timeSelect(value, allowNone, onChange) {
+    var p = /^\d\d:\d\d$/.test(value || '') ? value.split(':') : ['', '00'];
+    var hours = range(0, 23).map(function (i) { return [pad(i), pad(i)]; });
+    if (allowNone) hours.unshift(['', 'בלי']);
+    var mins = range(0, 11).map(function (i) { return [pad(i * 5), pad(i * 5)]; });
+    if (mins.every(function (m) { return m[0] !== p[1]; })) { mins.push([p[1], p[1]]); mins.sort(); }
+    var hs = selectOf(hours, p[0], 'שעה'), ms = selectOf(mins, p[1], 'דקות');
+    function sync() { ms.disabled = !hs.value; if (onChange) onChange(); }
+    hs.addEventListener('change', sync);
+    ms.addEventListener('change', sync);
+    ms.disabled = !hs.value;
+    return {
+      el: h('div', { class: 'time-pick' }, [hs, h('span', { class: 'colon', text: ':' }), ms]),
+      value: function () { return hs.value ? hs.value + ':' + ms.value : ''; },
+      set: function (v) { var q = v.split(':'); hs.value = q[0]; ms.value = q[1]; sync(); }
+    };
+  }
+
+  /** שדה תזכורת: בלי / בעוד שעה / מחר 9:00 / לבחור יום ושעה. value(): ISO, '' או null (שגיאה). */
   function remindField(current, dueDate) {
-    var td = today();
+    var td = today(), tm = addDays(td, 1), t2 = addDays(td, 2);
     var wrap = h('div', { class: 'field remind-field' });
-    var dIn = h('input', { type: 'date', min: td, 'aria-label': 'תאריך התזכורת' });
-    var tIn = h('input', { type: 'time', 'aria-label': 'שעת התזכורת', step: '300' });
-    var pick = h('div', { class: 'two hidden' }, [dIn, tIn]);
     var mode = current ? 'pick' : '';
-    if (current) { dIn.value = isoDay(current); tIn.value = timeOf(current); }
-    var chips = optChips([['', 'בלי'], ['hour', 'בעוד שעה'], ['tom9', 'מחר ב-9:00'], ['pick', '📅 תאריך ושעה']], mode, function (v) {
+    var day = current ? isoDay(current) : (dueDate && dueDate >= td ? dueDate : td);
+    var dayOpts = [[td, 'היום'], [tm, 'מחר'], [t2, 'מחרתיים']];
+    if (dueDate && dueDate > t2) dayOpts.push([dueDate, 'ביום היעד (' + shortDate(dueDate) + ')']);
+    dayOpts.push(['other', '📅 תאריך אחר']);
+    var known = dayOpts.some(function (o) { return o[0] === day; });
+    var dayMode = known ? day : 'other';
+    var dIn = h('input', { type: 'date', min: td, class: known ? 'hidden' : '', value: known ? '' : day, 'aria-label': 'תאריך התזכורת' });
+    dIn.style.marginTop = '8px';
+    var summary = h('p', { class: 'remind-sum' });
+    var tsel = timeSelect(current ? timeOf(current) : nextHour(), false, upd);
+    var dayChips = optChips(dayOpts, dayMode, function (v) {
+      dayMode = v;
+      dIn.classList.toggle('hidden', v !== 'other');
+      if (v === 'other') { if (!dIn.value) dIn.value = addDays(td, 3); try { dIn.showPicker(); } catch (e) { /* לא נתמך */ } }
+      upd();
+    });
+    dIn.addEventListener('change', upd);
+    var pick = h('div', { class: 'remind-pick' + (mode === 'pick' ? '' : ' hidden') }, [
+      h('span', { class: 'lbl', text: 'באיזה יום' }), dayChips, dIn,
+      h('span', { class: 'lbl', style: 'margin-top:12px', text: 'באיזו שעה' }), tsel.el, summary
+    ]);
+    function when() { // הרגע שנבחר, או null
+      if (mode === 'hour') return new Date(Date.now() + 3600000);
+      if (mode === 'tom9') { var x = dateOf(tm); x.setHours(9, 0, 0, 0); return x; }
+      if (mode !== 'pick') return null;
+      var dd = dayMode === 'other' ? dIn.value : dayMode;
+      if (!dd) return null;
+      var d = dateOf(dd), p = tsel.value().split(':');
+      d.setHours(+p[0], +p[1], 0, 0);
+      return d;
+    }
+    function upd() {
+      var d = when();
+      var past = d && d.getTime() < Date.now() - 60000 && (!current || d.toISOString() !== current);
+      summary.textContent = !d ? '' : past ? '⚠ הזמן הזה כבר עבר. בחרו זמן אחר.' : '⏰ התזכורת תגיע: ' + whenLabel(d.toISOString()) + ' (' + 'יום ' + DAYS[d.getDay()] + ')';
+      summary.className = 'remind-sum' + (past ? ' bad' : '');
+    }
+    var chips = optChips([['', 'בלי'], ['hour', 'בעוד שעה'], ['tom9', 'מחר ב-9:00'], ['pick', '⏰ לבחור יום ושעה']], mode, function (v) {
       mode = v;
       pick.classList.toggle('hidden', v !== 'pick');
-      if (v === 'pick') { if (!dIn.value) dIn.value = dueDate && dueDate >= td ? dueDate : td; if (!tIn.value) tIn.value = nextHour(); }
+      upd();
     });
     wrap.appendChild(h('span', { class: 'lbl', text: '⏰ תזכורת לטלפון' }));
     wrap.appendChild(chips);
     wrap.appendChild(pick);
     if (!pushHere()) wrap.appendChild(h('p', { class: 'small', text: 'התזכורת מגיעה כהתראה לטלפון של האחראי. כדי לקבל התראות במכשיר הזה: ⚙ ← "הפעלת התראות".' }));
-    if (current) pick.classList.remove('hidden');
+    upd();
     return {
       el: wrap,
       open: function () { if (!mode) { chips.querySelector('[data-v="pick"]').click(); } },
       value: function () {
         if (!mode) return '';
-        var d;
-        if (mode === 'hour') d = new Date(Date.now() + 3600000);
-        else if (mode === 'tom9') { d = dateOf(addDays(td, 1)); d.setHours(9, 0, 0, 0); }
-        else {
-          if (!dIn.value || !tIn.value) { toast('צריך לבחור תאריך ושעה לתזכורת'); return null; }
-          d = dateOf(dIn.value);
-          var p = tIn.value.split(':');
-          d.setHours(+p[0], +p[1], 0, 0);
-          if (d.getTime() < Date.now() - 60000 && (!current || d.toISOString() !== current)) { toast('הזמן שנבחר לתזכורת כבר עבר'); return null; }
-        }
+        var d = when();
+        if (!d) { toast('צריך לבחור יום לתזכורת'); return null; }
+        if (d.getTime() < Date.now() - 60000 && (!current || d.toISOString() !== current)) { toast('הזמן שנבחר לתזכורת כבר עבר'); return null; }
         return d.toISOString();
       }
     };
@@ -1882,8 +1927,8 @@
       var rem = remindField(t ? t.remindAt : '', st.dueDate);
       var remBox = h('div', { class: t && t.remindAt ? '' : 'hidden' }, rem.el);
       var rep = t ? null : repeatField();
-      var repTime = h('input', { type: 'time', step: '300', 'aria-label': 'שעת תזכורת קבועה' });
-      var repBox = rep ? h('div', { class: 'hidden' }, [rep.el, h('div', { class: 'field' }, [h('span', { class: 'lbl', text: '⏰ שעת תזכורת בכל הופעה (לא חובה)' }), repTime])]) : null;
+      var repTime = timeSelect('', true);
+      var repBox = rep ? h('div', { class: 'hidden' }, [rep.el, h('div', { class: 'field' }, [h('span', { class: 'lbl', text: '⏰ שעת תזכורת בכל הופעה (לא חובה)' }), repTime.el])]) : null;
       var note = h('textarea', { placeholder: 'פרטים נוספים (לא חובה)', maxlength: '2000', 'aria-label': 'הערה' });
       note.value = t ? (t.note || '') : (preset.note || '');
       note.addEventListener('input', function () { grow(note, noteMax()); });
@@ -1960,7 +2005,7 @@
         if (!v) { title.classList.add('err'); title.focus(); toast('צריך לכתוב מה צריך לעשות'); return; }
         var isRep = rep && !repBox.classList.contains('hidden') && rep.rule();
         if (isRep) {
-          queue({ type: 'createSeries', series: { id: rid(), title: v, note: note.value.trim(), priority: st.priority, assigneeId: sel.value, rule: rep.rule(), remindTime: repTime.value || '' } });
+          queue({ type: 'createSeries', series: { id: rid(), title: v, note: note.value.trim(), priority: st.priority, assigneeId: sel.value, rule: rep.rule(), remindTime: repTime.value() } });
           closeSheet();
           toast('🔁 משימה חוזרת נשמרה: ' + ruleText(rep.rule()));
           return;
