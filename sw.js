@@ -1,6 +1,6 @@
 // Service worker: שומר את קבצי האפליקציה בטלפון, כדי שהיא תיפתח מהר גם בלי רשת.
 // בכל עדכון של האפליקציה מעלים את VERSION (חייב להיות זהה ל-APP_VERSION ב-app.js).
-var VERSION = '1.0.0';
+var VERSION = '1.0.1';
 var CACHE = 'tt-' + VERSION;
 var SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 

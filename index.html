@@ -144,12 +144,12 @@
   /* ---------- חלון (גיליון תחתון) ---------- */
   .sheet-wrap { position: fixed; inset: 0; background: var(--overlay); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
   .sheet {
-    background: var(--card); width: 100%; max-width: 640px; max-height: 92vh; overflow: auto; overscroll-behavior: contain;
+    background: var(--card); width: 100%; max-width: 640px; max-height: 92%; overflow: auto; overscroll-behavior: contain;
     border-radius: 20px 20px 0 0; padding: 14px 16px calc(22px + env(safe-area-inset-bottom));
   }
   @media (min-width: 700px) {
     .sheet-wrap { align-items: flex-start; padding-top: 6vh; }
-    .sheet { border-radius: 20px; max-height: 86vh; padding-bottom: 22px; }
+    .sheet { border-radius: 20px; max-height: 92%; padding-bottom: 22px; }
   }
   .sheet-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
   .sheet-head h2 { flex: 1; margin: 8px 0 0; font-size: 20px; overflow-wrap: anywhere; }
@@ -164,6 +164,7 @@
   input.err { outline: 2px solid var(--bad); }
   textarea { min-height: 84px; resize: vertical; }
   .title-input { font-size: 19px; font-weight: 600; }
+  textarea.title-input { min-height: 48px; resize: none; overflow: hidden; line-height: 1.35; display: block; }
   .ltr { direction: ltr; text-align: right; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .opt {

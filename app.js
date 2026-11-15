@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.0.0';
+  var APP_VERSION = '1.0.1';
   var API_LEVEL = 1;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -691,6 +691,16 @@
   }
 
   // ---------------------------------------------------------------- הוספה ועריכה
+  // תיבת טקסט שגדלה עם התוכן עד גובה מרבי, ומשם נגללת בתוכה
+  function grow(ta, max) {
+    if (!ta.offsetParent) return; // מוסתרת: נחשב כשתוצג
+    ta.style.height = 'auto';
+    var need = ta.scrollHeight + 2;
+    ta.style.height = Math.min(need, max) + 'px';
+    ta.style.overflowY = need > max ? 'auto' : 'hidden';
+  }
+  function noteMax() { return Math.max(120, Math.round((window.visualViewport ? visualViewport.height : window.innerHeight) * 0.4)); }
+
   function optChips(options, current, onPick) {
     var box = h('div', { class: 'chips' });
     options.forEach(function (o) {
@@ -713,10 +723,17 @@
       var st = { priority: t ? t.priority : 'normal', dueDate: t ? (t.dueDate || '') : '' };
       sheetHead(el, t ? 'עריכת משימה' : 'משימה חדשה');
 
-      var title = h('input', { type: 'text', class: 'title-input', maxlength: '200', placeholder: 'מה צריך לעשות?', value: t ? t.title : '', enterkeyhint: 'done', 'aria-label': 'מה צריך לעשות' });
-      title.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); save(); } });
-      title.addEventListener('input', function () { title.classList.remove('err'); });
+      // שם המשימה: תיבה שגדלה עם הטקסט, כדי שכל מה שכתוב ייראה (Enter = שמירה)
+      var title = h('textarea', { class: 'title-input', rows: '1', maxlength: '200', placeholder: 'מה צריך לעשות?', enterkeyhint: 'done', 'aria-label': 'מה צריך לעשות' });
+      title.value = t ? t.title : '';
+      title.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); save(); } });
+      title.addEventListener('input', function () {
+        title.classList.remove('err');
+        if (/[\r\n]/.test(title.value)) title.value = title.value.replace(/\s*[\r\n]+\s*/g, ' ');
+        grow(title, 168);
+      });
       el.appendChild(h('div', { class: 'field' }, title));
+      grow(title, 168);
 
       el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'דחיפות' }),
         optChips([['high', '🔴 דחוף'], ['normal', '🟡 רגיל'], ['low', '⚪ לא דחוף']], st.priority, function (v) { st.priority = v; })]));
@@ -748,10 +765,12 @@
 
       var note = h('textarea', { placeholder: 'פרטים נוספים (לא חובה)', maxlength: '2000', 'aria-label': 'הערה' });
       note.value = t ? (t.note || '') : '';
+      note.addEventListener('input', function () { grow(note, noteMax()); });
       var noteField = h('div', { class: 'field' + (note.value ? '' : ' hidden') }, [h('span', { class: 'lbl', text: 'הערה' }), note]);
-      var noteBtn = h('button', { class: 'link-btn' + (note.value ? ' hidden' : ''), type: 'button', text: '+ הוספת הערה', onclick: function () { noteBtn.classList.add('hidden'); noteField.classList.remove('hidden'); note.focus(); } });
+      var noteBtn = h('button', { class: 'link-btn' + (note.value ? ' hidden' : ''), type: 'button', text: '+ הוספת הערה', onclick: function () { noteBtn.classList.add('hidden'); noteField.classList.remove('hidden'); grow(note, noteMax()); note.focus(); } });
       el.appendChild(noteBtn);
       el.appendChild(noteField);
+      grow(note, noteMax());
 
       el.appendChild(h('div', { class: 'actions' }, h('button', { class: 'btn block', type: 'button', text: t ? 'שמירה' : 'הוספת המשימה', onclick: save })));
 
@@ -1223,6 +1242,23 @@
       else sync(true);
     });
     $('sheetWrap').addEventListener('click', function (e) { if (e.target === $('sheetWrap')) closeSheet(); });
+    // כשהמקלדת נפתחת, החלון מתכווץ לחלק הגלוי של המסך, כך שאפשר לגלול בו עד הסוף
+    var vv = window.visualViewport;
+    if (vv) {
+      var fitSheet = function (e) {
+        var w = $('sheetWrap');
+        w.style.top = vv.offsetTop + 'px';
+        w.style.height = vv.height + 'px';
+        w.style.bottom = 'auto';
+        var a = document.activeElement;
+        if (e && e.type === 'resize' && a && w.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) {
+          setTimeout(function () { try { a.scrollIntoView({ block: 'nearest' }); } catch (x) { /* לא חשוב */ } }, 50);
+        }
+      };
+      vv.addEventListener('resize', fitSheet);
+      vv.addEventListener('scroll', fitSheet);
+      fitSheet();
+    }
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && stack.length) closeSheet(); });
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) return;
