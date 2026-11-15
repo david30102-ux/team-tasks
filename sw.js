@@ -1,7 +1,7 @@
 // Service worker: שומר את קבצי האפליקציה בטלפון (נפתחת מהר גם בלי רשת), מציג התראות שמגיעות מ-Firebase
 // כשהאפליקציה סגורה, ומקבל "שיתוף" מוואטסאפ באנדרואיד.
 // בכל עדכון של האפליקציה מעלים את VERSION (חייב להיות זהה ל-APP_VERSION ב-app.js).
-var VERSION = '2.0.0';
+var VERSION = '2.0.1';
 var CACHE = 'tt-' + VERSION;
 var SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
@@ -32,6 +32,23 @@ self.addEventListener('activate', function (e) {
 });
 
 self.addEventListener('message', function (e) { if (e.data === 'skipWaiting') self.skipWaiting(); });
+
+/** לחיצה על התראה שהאפליקציה הציגה בעצמה (כשהייתה פתוחה). התראות של Firebase מטופלות על ידי Firebase. */
+self.addEventListener('notificationclick', function (e) {
+  var d = (e.notification && e.notification.data) || {};
+  if (!d.ttLink) return;
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c.url.indexOf(self.registration.scope) === 0 && 'focus' in c) {
+        if (d.ttTask) c.postMessage({ openTask: d.ttTask });
+        return c.focus();
+      }
+    }
+    return self.clients.openWindow(d.ttLink);
+  }));
+});
 
 /** שיתוף מאפליקציה אחרת (אנדרואיד): שומרים את הטקסט והקבצים, ופותחים את האפליקציה עם משימה חדשה. */
 function saveShare(data) {

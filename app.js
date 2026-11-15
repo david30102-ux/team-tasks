@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.0.0';
+  var APP_VERSION = '2.0.1';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -278,6 +278,8 @@
     calendar_not_allowed: 'אפשר לחבר יומן ראשי רק אם המנהל רשם אצלך את כתובת ה-Gmail הזו. אפשר לחבר יומן נוסף (מזהה שמסתיים ב-group.calendar.google.com).',
     calendar_taken: 'היומן הזה כבר מחובר לעובד אחר.',
     calendar_not_shared: 'השרת לא רואה את היומן. בדקו שהוא שותף עם חשבון העמותה עם "הצגת כל פרטי האירוע".',
+    quiet: 'בשבת ובחג לא נשלחות התראות.',
+    no_device: 'המכשיר עוד לא רשום להתראות. לחצו קודם "הפעלת התראות".',
     server_error: 'תקלה בשרת. נסו שוב, ואם זה חוזר, ספרו למנהל.',
     no_server: 'השרת עוד לא הוגדר.'
   };
@@ -550,9 +552,12 @@
       if (!messaging) {
         messaging = firebase.messaging();
         messaging.onMessage(function (p) {
+          // האפליקציה פתוחה: Firebase לא מציג התראה בעצמו, אז מציגים אותה כאן (עם הצליל של הטלפון)
           var n = (p && p.notification) || {}, d = (p && p.data) || {};
+          var title = d.title || n.title || 'עדכון', body = d.body || n.body || '';
           tick();
-          toast((n.title || 'עדכון') + (n.body ? ': ' + n.body : ''), d.taskId ? 'פתיחה' : null, d.taskId ? function () { openTask(d.taskId); } : null);
+          showLocalNotification(title, body, d);
+          toast(title + (body ? ': ' + body : ''), d.taskId ? 'פתיחה' : null, d.taskId ? function () { openTask(d.taskId); } : null);
         });
       }
       return navigator.serviceWorker.ready;
@@ -570,6 +575,24 @@
       });
     });
   }
+  function showLocalNotification(title, body, d) {
+    if (!('serviceWorker' in navigator) || !window.Notification || Notification.permission !== 'granted') return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.showNotification(title, {
+        body: body, icon: 'icon-192.png', badge: 'icon-192.png', lang: 'he', dir: 'rtl',
+        tag: d.taskId || d.kind || 'tt', renotify: true, requireInteraction: d.kind === 'remind', vibrate: [300, 120, 300],
+        data: { ttTask: d.taskId || '', ttLink: APP_URL + (d.taskId ? '#t=' + d.taskId : '') }
+      });
+    }).catch(function () { /* לא חשוב */ });
+  }
+  function testPush(btn) {
+    busy(btn, true, 'שולח…');
+    api('pushTest', {}).then(function (r) {
+      busy(btn, false);
+      toast(r.ok ? 'נשלחה התראת ניסיון. היא אמורה להגיע תוך כמה שניות.' : errText(r));
+    });
+  }
+
   /** הפעלה בלחיצה (חייב לבקש אישור מיד בלחיצה, אחרת אייפון חוסם). */
   function enablePush(btn) {
     if (!pushSupported()) {
@@ -1152,13 +1175,18 @@
   }
 
   // ================================================================ חלונות
+  // כל חלון: {b: הפונקציה שבונה אותו, node: התוכן שנבנה, y: מיקום הגלילה}.
+  // חלון שמתחת לחלון אחר נשמר כמו שהוא (עם מה שהוקלד בו), ולא נבנה מחדש כשחוזרים אליו.
   var stack = [];
+  function topSheet() { return stack[stack.length - 1]; }
   function openSheet(builder) {
-    stack.push(builder);
+    var t = topSheet();
+    if (t) t.y = $('sheetBox').scrollTop;
+    stack.push({ b: builder, node: null, y: 0 });
     try { history.pushState({ sheet: stack.length }, ''); } catch (e) { /* לא נתמך */ }
     showTop(true);
   }
-  function replaceSheet(builder) { stack[stack.length - 1] = builder; showTop(true); }
+  function replaceSheet(builder) { stack[stack.length - 1] = { b: builder, node: null, y: 0 }; showTop(true); }
   // כל חלון פתוח = רשומה אחת בהיסטוריה (כדי שכפתור "חזרה" בטלפון יסגור אותו).
   // סוגרים מיד, ואז מסירים את הרשומה; skipPop מונע סגירה כפולה (ויציאה מהאפליקציה בלחיצה כפולה).
   var skipPop = 0;
@@ -1175,41 +1203,55 @@
     showTop();
     if (hadEntry) { skipPop++; try { history.back(); } catch (e) { skipPop--; } }
   }
+  function mount(t) {
+    var host = $('sheet');
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(t.node);
+    Array.prototype.forEach.call(t.node.querySelectorAll('textarea[data-keep]'), function (x) { grow(x, 160); });
+  }
+  /** בונה מחדש חלון שמציג נתונים (פרטי משימה), ושומר טקסט שהתחילו להקליד בו. מחזיר איזה שדה היה בפוקוס. */
+  function rebuild(t) {
+    var keep = {}, act = document.activeElement, focusKey = '';
+    if (t.node) {
+      if (t.node.contains(act) && act.getAttribute) focusKey = act.getAttribute('data-keep') || '';
+      Array.prototype.forEach.call(t.node.querySelectorAll('[data-keep]'), function (x) { keep[x.getAttribute('data-keep')] = x.value; });
+    }
+    t.node = h('div');
+    t.focusEl = t.b(t.node);
+    Object.keys(keep).forEach(function (k) { var x = t.node.querySelector('[data-keep="' + k + '"]'); if (x) x.value = keep[k]; });
+    return focusKey;
+  }
   function showTop(focus) {
-    var wrap = $('sheetWrap'), el = $('sheet');
+    var wrap = $('sheetWrap'), box = $('sheetBox');
     stopRecording();
     if (!stack.length) {
       wrap.classList.add('hidden');
-      el.textContent = '';
+      $('sheet').textContent = '';
       document.body.classList.remove('noscroll');
       if (S.token && S.me && !$('app').classList.contains('hidden')) renderView(); // למשל: עדכון שנקרא יורד מהרשימה
       return;
     }
     wrap.classList.remove('hidden');
     document.body.classList.add('noscroll');
-    el.textContent = '';
-    el.dropTarget = null;
-    var f = stack[stack.length - 1](el);
-    if (focus) {
-      $('sheetBox').scrollTop = 0;
-      if (f && f.focus) f.focus();
-    }
+    var t = topSheet(), fresh = !t.node;
+    if (fresh || t.b.live) rebuild(t); // חלון חדש נבנה; חלון נתונים מתעדכן; טופס נשאר כמו שהיה
+    mount(t);
+    if (fresh) {
+      box.scrollTop = 0;
+      if (focus && t.focusEl && t.focusEl.focus) t.focusEl.focus();
+    } else box.scrollTop = t.y || 0;
   }
   /** חלון שמציג נתונים מתעדכן; טקסט שהתחילו להקליד בו נשמר. חלון עם טופס לא נוגעים בו. */
   function refreshSheet() {
-    if (!stack.length || !stack[stack.length - 1].live) return;
+    var t = topSheet();
+    if (!t || !t.b.live || !t.node) return;
     var box = $('sheetBox');
-    if (Array.prototype.some.call(box.querySelectorAll('audio'), function (a) { return !a.paused; })) return; // לא קוטעים השמעה
-    var keep = {}, act = document.activeElement, focusKey = act && act.getAttribute && act.getAttribute('data-keep');
-    Array.prototype.forEach.call(box.querySelectorAll('[data-keep]'), function (x) { keep[x.getAttribute('data-keep')] = x.value; });
+    if (Array.prototype.some.call(t.node.querySelectorAll('audio'), function (a) { return !a.paused; })) return; // לא קוטעים השמעה
     var y = box.scrollTop;
-    showTop(false);
-    Object.keys(keep).forEach(function (k) {
-      var x = box.querySelector('[data-keep="' + k + '"]');
-      if (x) { x.value = keep[k]; if (x.tagName === 'TEXTAREA') grow(x, 160); }
-    });
+    var focusKey = rebuild(t);
+    mount(t);
     box.scrollTop = y;
-    if (focusKey) { var f = box.querySelector('[data-keep="' + focusKey + '"]'); if (f) f.focus(); }
+    if (focusKey) { var f = t.node.querySelector('[data-keep="' + focusKey + '"]'); if (f) f.focus(); }
   }
   window.addEventListener('popstate', function () {
     if (skipPop) { skipPop--; return; }
@@ -1408,18 +1450,32 @@
     }
     return wrap;
   }
+  function hasCamera() { return IS_IOS || IS_ANDROID || !!window.TT_FORCE_PHONE; }
+  /** כפתורי צירוף: בטלפון "צילום" (פותח את המצלמה ישר) ו"גלריה"; במחשב "תמונה או קובץ". ועוד "הקלטה". */
+  function pickers(onAttach, btnClass) {
+    function inp(accept, capture) {
+      var i = h('input', { type: 'file', accept: accept, multiple: capture ? null : true, capture: capture || null, class: 'hidden', 'aria-label': 'בחירת קובץ' });
+      i.addEventListener('change', function () {
+        var files = Array.prototype.slice.call(i.files || []);
+        i.value = '';
+        files.forEach(function (f) { makeAttachment(f).then(onAttach, function (e) { toast(e.message); }); });
+      });
+      return i;
+    }
+    var out = [];
+    if (hasCamera()) {
+      var cam = inp('image/*', 'environment'), gal = inp('image/*');
+      out.push(cam, h('button', { class: btnClass, type: 'button', text: '📷 צילום', onclick: function () { cam.click(); } }));
+      out.push(gal, h('button', { class: btnClass, type: 'button', text: '🖼️ גלריה', onclick: function () { gal.click(); } }));
+    } else {
+      var any = inp('image/*,audio/*,application/pdf');
+      out.push(any, h('button', { class: btnClass, type: 'button', text: '📎 תמונה או קובץ', onclick: function () { any.click(); } }));
+    }
+    out.push(h('button', { class: btnClass, type: 'button', text: '🎤 הקלטה', onclick: function () { openSheet(recordSheet(onAttach)); } }));
+    return out;
+  }
   function attachButtons(onAttach) {
-    var input = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden', 'aria-label': 'בחירת תמונה' });
-    input.addEventListener('change', function () {
-      var files = Array.prototype.slice.call(input.files || []);
-      input.value = '';
-      files.forEach(function (f) { makeAttachment(f).then(onAttach, function (e) { toast(e.message); }); });
-    });
-    return h('div', { class: 'attach' }, [
-      input,
-      h('button', { class: 'btn small-btn secondary', type: 'button', text: '📷 תמונה', onclick: function () { input.click(); } }),
-      h('button', { class: 'btn small-btn secondary', type: 'button', text: '🎤 הקלטה', onclick: function () { openSheet(recordSheet(onAttach)); } })
-    ]);
+    return h('div', { class: 'attach' }, pickers(onAttach, 'btn small-btn secondary'));
   }
   function imageSheet(src) {
     return function (el) {
@@ -1865,17 +1921,7 @@
       xbtn('⏰ תזכורת', remBox, function () { rem.open(); });
       if (rep) xbtn('🔁 חוזרת', repBox, function () { if (!rep.rule()) rep.pick('weekly'); });
       xbtn('📝 הערה', noteBox, function () { grow(note, noteMax()); note.focus(); });
-      var pickInput = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden', 'aria-label': 'בחירת תמונה' });
-      pickInput.addEventListener('change', function () {
-        var files = Array.prototype.slice.call(pickInput.files || []);
-        pickInput.value = '';
-        files.forEach(function (f) { makeAttachment(f).then(attach, function (e) { toast(e.message); }); });
-      });
-      var photoBtn = h('button', { class: 'opt', type: 'button', text: '📷 תמונה', onclick: function () { pickInput.click(); } });
-      var recBtn = h('button', { class: 'opt', type: 'button', text: '🎤 הקלטה', onclick: function () { openSheet(recordSheet(attach)); } });
-      extras.appendChild(photoBtn);
-      extras.appendChild(recBtn);
-      extras.appendChild(pickInput);
+      var pickBtns = pickers(attach, 'opt').filter(function (x) { extras.appendChild(x); return x.tagName === 'BUTTON'; });
       el.appendChild(extras);
       el.appendChild(remBox);
       if (repBox) el.appendChild(repBox);
@@ -1887,8 +1933,7 @@
           dueField.classList.toggle('hidden', on);
           remBox.classList.toggle('hidden', on || !extras.firstChild.classList.contains('on'));
           extras.firstChild.classList.toggle('hidden', on);
-          photoBtn.classList.toggle('hidden', on);
-          recBtn.classList.toggle('hidden', on);
+          pickBtns.forEach(function (b) { b.classList.toggle('hidden', on); });
         };
         extras.children[1].addEventListener('click', syncRep);
       }
@@ -2214,7 +2259,17 @@
 
   function pushBox() {
     var box = h('div', { class: 'box' }, [h('h3', { text: '🔔 התראות לטלפון' })]);
-    if (pushHere()) box.appendChild(h('p', { class: 'ok-text', text: '✓ ההתראות פעילות במכשיר הזה.' }));
+    if (pushHere()) {
+      box.appendChild(h('p', { class: 'ok-text', text: '✓ ההתראות פעילות במכשיר הזה.' }));
+      box.appendChild(h('button', { class: 'btn secondary', type: 'button', text: 'שליחת התראת ניסיון', onclick: function (e) { testPush(e.currentTarget); } }));
+      box.appendChild(h('p', { class: 'small', style: 'margin-top:10px', text: '🔊 הצליל: ההתראות משמיעות את צליל ההתראות של הטלפון, ואת הצליל בוחרים בהגדרות הטלפון:' }));
+      box.appendChild(h('ul', { class: 'steps small' }, [
+        h('li', { text: 'אנדרואיד: הגדרות ← אפליקציות ← "משימות" ← התראות ← לוחצים על סוג ההתראות ← "צליל" (וגם לבדוק שמסומן "צליל וחלון קופץ" או "חשיבות גבוהה").' }),
+        h('li', { text: 'אייפון: הגדרות ← התראות ← "משימות" ← להפעיל "צלילים".' }),
+        h('li', { text: 'כשהטלפון במצב שקט או רטט, גם ההתראות שקטות.' })
+      ]));
+      box.appendChild(h('p', { class: 'small', text: '⏰ תזכורת נשארת על המסך עד שלוחצים עליה.' }));
+    }
     else if (!pushSupported()) {
       box.appendChild(h('p', { text: IS_IOS && !standalone() ? 'באייפון ההתראות עובדות רק באפליקציה המותקנת. קודם מתקינים למסך הבית ופותחים מהאייקון.' : 'המכשיר או הדפדפן הזה לא תומכים בהתראות.' }));
     } else if (Notification.permission === 'denied') {
@@ -2569,19 +2624,19 @@
   }
   function initDrop() {
     var box = $('sheetBox');
-    box.addEventListener('dragover', function (e) { if ($('sheet').dropTarget || (stack.length && stack[stack.length - 1].taskId)) { e.preventDefault(); box.classList.add('drop'); } });
+    var dropInfo = function () { var t = topSheet(); return t ? { target: t.node && t.node.dropTarget, taskId: t.b.taskId } : {}; };
+    box.addEventListener('dragover', function (e) { var d = dropInfo(); if (d.target || d.taskId) { e.preventDefault(); box.classList.add('drop'); } });
     box.addEventListener('dragleave', function () { box.classList.remove('drop'); });
     box.addEventListener('drop', function (e) {
       box.classList.remove('drop');
       var files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
       if (!files.length) return;
       e.preventDefault();
-      var target = $('sheet').dropTarget;
-      var top = stack[stack.length - 1];
+      var d = dropInfo();
       files.forEach(function (f) {
         makeAttachment(f).then(function (a) {
-          if (target) target(a);
-          else if (top && top.taskId) { queueUpload(top.taskId, a); toast('הקובץ נוסף ✓'); }
+          if (d.target) d.target(a);
+          else if (d.taskId) { queueUpload(d.taskId, a); toast('הקובץ נוסף ✓'); }
         }, function (er) { toast(er.message); });
       });
     });
@@ -2626,6 +2681,9 @@
     });
     window.addEventListener('online', function () { tick(); processUploads(); });
     window.addEventListener('hashchange', checkHash);
+    if ('serviceWorker' in navigator) { // לחיצה על התראה כשהאפליקציה כבר פתוחה: פותחים את המשימה בלי לטעון מחדש
+      navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.openTask && S.token) openTask(e.data.openTask); });
+    }
     setInterval(function () { if (!document.hidden) tick(); }, 60000);
     render();
     initSW();
