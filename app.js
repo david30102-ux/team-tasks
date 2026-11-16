@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.1.1';
+  var APP_VERSION = '2.2.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -227,6 +227,13 @@
         break;
       case 'reject': if (t.status === 'pending') { t.status = 'rejected'; t.reason = op.reason; t.rank = null; } break;
       case 'return': if (t.status === 'open') { t.status = 'returned'; t.reason = op.reason; t.rank = null; } break;
+      case 'resend':
+        if (t.status === 'rejected' || t.status === 'returned') {
+          t.status = (t.assigneeId === me || t.assigneeId === t.createdById) ? 'open' : 'pending';
+          t.reason = ''; t.respondedAt = ''; t.assignedAt = op.at; t.rank = null;
+        }
+        if (op.text && !v.allComments.some(function (c) { return c.id === op.cid; })) v.allComments.push({ id: op.cid, taskId: t.id, userId: me, at: op.at, text: op.text, kind: 'comment' });
+        break;
       case 'done': if (isActive(t)) { t.status = 'done'; t.doneAt = op.at; t.doneById = me; } break;
       case 'reopen': t.status = 'open'; t.doneAt = ''; t.doneById = ''; break;
       case 'cancel': t.status = 'cancelled'; break;
@@ -1366,7 +1373,7 @@
         btn('secondary', 'שחזור המשימה', function () { queue({ type: 'reopen', id: id }); toast('המשימה שוחזרה'); });
       }
       if ((t.status === 'rejected' || t.status === 'returned') && canEdit) {
-        btn('', '↪ להעביר למישהו אחר', function () { openSheet(assignSheet(id)); });
+        btn('', '↪ להעביר / לשלוח שוב', function () { openSheet(assignSheet(id)); });
         btn('secondary', 'לקחת לעצמי', function () { queue({ type: 'update', id: id, fields: { assigneeId: me } }); toast('המשימה עברה אליך'); });
       }
       if (canEdit && !isAssignee && (t.status === 'pending' || t.status === 'open')) {
@@ -1584,17 +1591,38 @@
   function assignSheet(id) {
     return function (el) {
       var t = task(id);
-      sheetHead(el, 'להעביר למישהו אחר');
+      // משימה שנדחתה/הוחזרה: אפשר גם לשלוח שוב לאותו עובד (חוזרת לאישור שלו)
+      var prev = t && (t.status === 'rejected' || t.status === 'returned') && t.assigneeId !== S.me.id && (user(t.assigneeId) || {}).active ? t.assigneeId : '';
+      sheetHead(el, prev ? 'למי לשלוח את המשימה?' : 'להעביר למישהו אחר');
       var sel = h('select', { 'aria-label': 'למי' });
+      if (prev) sel.appendChild(h('option', { value: prev, text: '↩ שוב ל' + uname(prev) + ' (לאישור)' }));
       V.users.filter(function (u) { return u.active && (!t || u.id !== t.assigneeId); }).sort(byName).forEach(function (u) {
         sel.appendChild(h('option', { value: u.id, text: u.id === S.me.id ? 'אני' : u.name }));
       });
       el.appendChild(h('div', { class: 'field' }, sel));
-      el.appendChild(h('div', { class: 'actions' }, h('button', { class: 'btn block', type: 'button', text: 'העברה', onclick: function () {
+      var note = h('textarea', { rows: '2', maxlength: '300', placeholder: 'למשל: אין מי שיעשה את זה במקומך. אפשר ביום ראשון.' });
+      var noteBox = h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'הסבר ל' + uname(prev) + ' (לא חובה)' }), note]);
+      var sendBtn = h('button', { class: 'btn block', type: 'button' });
+      function upd() {
+        var again = !!prev && sel.value === prev;
+        noteBox.classList.toggle('hidden', !again);
+        sendBtn.textContent = again ? 'שליחה שוב' : 'העברה';
+      }
+      sel.addEventListener('change', upd);
+      if (prev) el.appendChild(noteBox);
+      upd();
+      sendBtn.addEventListener('click', function () {
+        if (prev && sel.value === prev) {
+          queue({ type: 'resend', id: id, cid: rid(), text: note.value.trim() });
+          closeSheet();
+          toast('המשימה נשלחה שוב ל' + uname(prev) + ' ✓ מחכה לאישור');
+          return;
+        }
         queue({ type: 'update', id: id, fields: { assigneeId: sel.value } });
         closeSheet();
         toast(sel.value === S.me.id ? 'המשימה עברה אליך' : 'המשימה נשלחה ל' + uname(sel.value) + ' ✓');
-      } })));
+      });
+      el.appendChild(h('div', { class: 'actions' }, sendBtn));
     };
   }
   function remindSheet(id) {
