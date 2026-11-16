@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.0.2';
+  var APP_VERSION = '2.1.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -102,17 +102,23 @@
       return { d: +o.day, m: EN_HEB[o.month] || 'tishrei' };
     } catch (e) { return { d: 1, m: 'tishrei' }; }
   }
+  /** "למתי" = היום שבו מטפלים במשימה. */
   function dueLabel(s) {
     var diff = dayDiff(today(), s);
     if (diff < 0) return { text: 'באיחור ' + daysWord(-diff), cls: 'late' };
     if (diff === 0) return { text: 'להיום', cls: 'today' };
     if (diff === 1) return { text: 'למחר', cls: '' };
-    if (diff < 7) return { text: 'עד יום ' + DAYS[dateOf(s).getDay()], cls: '' };
-    return { text: 'עד ' + shortDate(s), cls: '' };
+    if (diff < 7) return { text: 'ליום ' + DAYS[dateOf(s).getDay()] + ' ' + shortDate(s), cls: '' };
+    return { text: 'ל-' + shortDate(s), cls: '' };
   }
+  function remindDay(t) { return t.remindAt ? isoDay(t.remindAt) : ''; }
+  /** היום שבו מגיע זמן הטיפול במשימה: המוקדם מבין "למתי" ויום התזכורת. '' = בלי תאריך. */
+  function taskDay(t) { var a = t.dueDate || '', b = remindDay(t); return !a ? b : !b ? a : (a < b ? a : b); }
+  function isFuture(t) { var d = taskDay(t); return !!d && d > today(); }
+  /** כמה זמן המשימה פתוחה. short: סימן קצר לכרטיס ("⏳ 3 י׳"), ריק כשנפתחה היום. */
   function ageInfo(t) {
     var n = dayDiff(isoDay(t.createdAt) || today(), today());
-    return { text: n <= 0 ? 'נפתחה היום' : 'פתוחה ' + daysWord(n), cls: n >= 7 ? 'age-red' : n >= 3 ? 'age-orange' : '' };
+    return { n: n, text: n <= 0 ? 'נפתחה היום' : 'פתוחה ' + daysWord(n), short: n <= 0 ? '' : '⏳ ' + n + ' י׳', cls: n >= 7 ? 'age-red' : n >= 3 ? 'age-orange' : '' };
   }
   function whenShort(iso) {
     if (!iso) return '';
@@ -620,20 +626,6 @@
     registerPush().catch(function () {});
   }
 
-  // ================================================================ פגישות מהיומן
-  function loadMeetings(force) {
-    if (!S.me || !S.me.calendarId) return;
-    var td = today();
-    if (!force && S.meet && S.meet.day === td && Date.now() - S.meet.at < 10 * 60000) return;
-    S.meet = Object.assign({}, S.meet || {}, { day: td, at: Date.now() });
-    api('meetings', { force: !!force }).then(function (r) {
-      if (!r.ok) return;
-      S.meet = { day: td, at: Date.now(), events: r.events || [], error: r.error || '' };
-      sset('meet', S.meet);
-      if (S.tab === 'mine') render();
-    });
-  }
-
   // ================================================================ עדכונים חדשים ("נקרא")
   function seenAt(taskId) {
     if (!S.seen) return '';
@@ -701,7 +693,7 @@
 
   function renderTabs() {
     var me = S.me.id;
-    var mineN = V.tasks.filter(function (t) { return t.assigneeId === me && (t.status === 'open' || t.status === 'pending'); }).length;
+    var mineN = V.tasks.filter(function (t) { return t.assigneeId === me && (t.status === 'pending' || (t.status === 'open' && !isFuture(t))); }).length;
     var givenN = V.tasks.filter(function (t) { return t.createdById === me && t.assigneeId !== me && isActive(t) || (t.createdById === me && (t.status === 'rejected' || t.status === 'returned')); }).length;
     var tabs = [['mine', 'שלי', mineN], ['given', 'נתתי', givenN]];
     if (isMgr()) tabs.push(['team', 'צוות', 0]);
@@ -744,16 +736,28 @@
     return a.rank - b.rank;
   }
   function prOf(t) { return PR.indexOf(t.priority) >= 0 ? t.priority : 'normal'; }
-  /** המשימות הפתוחות שלי, מחולקות לפי דחיפות. */
+  /** המשימות הפתוחות שלי: "להיום" (היום ומה שעבר), קבוצות דחיפות (בלי תאריך), ועתידיות (מחר והלאה). */
   function myOpen() {
-    var me = S.me.id;
+    var me = S.me.id, td = today();
     var open = V.tasks.filter(function (t) { return t.assigneeId === me && t.status === 'open'; });
-    var manual = open.some(function (t) { return t.rank !== null && t.rank !== undefined; });
-    open.forEach(function (t) { if (t.rank === undefined) t.rank = null; });
-    open.sort(manual ? manualCmp : autoCmp);
+    var todayL = [], future = [], undated = [];
+    open.forEach(function (t) {
+      if (t.rank === undefined) t.rank = null;
+      var d = taskDay(t);
+      (!d ? undated : d > td ? future : todayL).push(t);
+    });
+    var manual = undated.some(function (t) { return t.rank !== null; });
+    undated.sort(manual ? manualCmp : autoCmp);
     var groups = { high: [], normal: [], low: [] };
-    open.forEach(function (t) { groups[prOf(t)].push(t); });
-    return { list: groups.high.concat(groups.normal, groups.low), groups: groups, manual: manual };
+    undated.forEach(function (t) { groups[prOf(t)].push(t); });
+    // להיום: קודם משימות עם שעה (לפי השעה), אחר כך בלי שעה: מה שבאיחור, ואז לפי דחיפות
+    var timeOfT = function (t) { return t.remindAt && remindDay(t) <= td ? t.remindAt : ''; };
+    todayL.sort(function (a, b) {
+      var ta = timeOfT(a), tb = timeOfT(b);
+      return cmpArr([ta ? 0 : 1, ta, taskDay(a), PR.indexOf(prOf(a)), a.createdAt || ''], [tb ? 0 : 1, tb, taskDay(b), PR.indexOf(prOf(b)), b.createdAt || '']);
+    });
+    future.sort(function (a, b) { return cmpArr([taskDay(a), a.remindAt || '9', PR.indexOf(prOf(a))], [taskDay(b), b.remindAt || '9', PR.indexOf(prOf(b))]); });
+    return { list: groups.high.concat(groups.normal, groups.low), groups: groups, manual: manual, today: todayL, future: future };
   }
   function doneOn(day, uid) {
     return V.tasks.filter(function (t) { return t.assigneeId === uid && t.status === 'done' && isoDay(t.doneAt) === day; })
@@ -774,20 +778,6 @@
     box.appendChild(h('div', { class: 'today-date', text: 'יום ' + DAYS[d.getDay()] + ' · ' + hebDate(d.toISOString()) + ' · ' + shortDate(td) }));
     var q = todayQuote();
     if (q) box.appendChild(h('div', { class: 'quote' }, [h('span', { class: 'qt', text: '״' + q.text + '״' }), q.source ? h('span', { class: 'qs', text: ' (' + q.source + ')' }) : null]));
-    if (S.me.calendarId) {
-      var m = S.meet && S.meet.day === td ? S.meet : null;
-      var mb = h('div', { class: 'meet' });
-      if (!m || !m.events) mb.appendChild(h('div', { class: 'small', text: '📅 טוען את הפגישות של היום…' }));
-      else if (m.error) mb.appendChild(h('div', { class: 'small', text: '📅 ' + (ERR[m.error] || 'לא הצלחתי לקרוא את היומן.') }));
-      else if (!m.events.length) mb.appendChild(h('div', { class: 'small', text: '📅 אין פגישות היום ביומן.' }));
-      else {
-        mb.appendChild(h('div', { class: 'meet-h', text: '📅 הפגישות של היום' }));
-        m.events.forEach(function (ev) {
-          mb.appendChild(h('div', { class: 'meet-row' }, [h('span', { class: 'mt', text: ev.allDay ? 'כל היום' : ev.start + (ev.end ? '–' + ev.end : '') }), ' ', ev.title]));
-        });
-      }
-      box.appendChild(mb);
-    }
     var n = doneOn(td, S.me.id).length;
     var msg;
     if (n) msg = '✓ היום ביצעת ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + '. ' + CHEER_DONE[dayNum(td) % CHEER_DONE.length] + ' 👏';
@@ -826,7 +816,6 @@
   function viewMine(el) {
     var me = S.me.id;
     el.appendChild(todayCard());
-    loadMeetings(false);
     add(el, pushCard());
     add(el, updatesBox());
 
@@ -846,8 +835,15 @@
         ? h('button', { class: 'link-btn', type: 'button', text: 'סדר אוטומטי', onclick: function () { queue({ type: 'autoOrder' }); toast('הרשימה חזרה לסדר אוטומטי'); } })
         : (o.list.length > 1 ? h('span', { class: 'hint', text: 'גוררים ≡ כדי לשנות סדר' }) : null)
     ]));
-    if (!o.list.length) {
-      el.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'big', text: '🎉' }), 'אין משימות פתוחות.', h('br'), 'לחצו על + כדי להוסיף משימה.']));
+    if (o.today.length) {
+      el.appendChild(h('div', { class: 'grp-h grp-today', text: '⏰ להיום (' + o.today.length + ')' }));
+      var tul = h('ul', { class: 'list grp', 'data-list': 'mine', 'data-group': 'today' });
+      o.today.forEach(function (t) { tul.appendChild(card(t, 'today', false)); });
+      el.appendChild(tul);
+    }
+    if (!o.list.length && !o.today.length) {
+      el.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'big', text: '🎉' }),
+        o.future.length ? 'אין משימות להיום.' : 'אין משימות פתוחות.', h('br'), 'לחצו על + כדי להוסיף משימה.']));
     } else {
       PR.forEach(function (p) {
         var g = o.groups[p];
@@ -864,6 +860,16 @@
       var ul2 = h('ul', { class: 'list', 'data-list': 'done' });
       done.forEach(function (t) { ul2.appendChild(card(t, 'mine', false)); });
       el.appendChild(ul2);
+    }
+    if (o.future.length) {
+      var showF = !!sget('showFuture', false);
+      el.appendChild(h('button', { class: 'future-btn', type: 'button', 'aria-expanded': showF ? 'true' : 'false', onclick: function () { sset('showFuture', !showF); render(); } },
+        [h('span', { text: '📅 משימות עתידיות (' + o.future.length + ')' }), h('span', { class: 'chev', text: showF ? '▴' : '▾' })]));
+      if (showF) {
+        var ful = h('ul', { class: 'list', 'data-list': 'future' });
+        o.future.forEach(function (t) { ful.appendChild(card(t, 'future', false)); });
+        el.appendChild(ful);
+      }
     }
     var ser = V.series.filter(function (s) { return s.assigneeId === me || s.createdById === me; });
     if (ser.length) {
@@ -1030,11 +1036,16 @@
 
     var meta = h('div', { class: 'meta' });
     var active = t.status === 'open' || t.status === 'pending';
+    var nowIso = new Date().toISOString(), td = today();
+    if (mode === 'today' && t.remindAt && remindDay(t) <= td) { // ברשימת "להיום": השעה בולטת, ואדומה כשהגיע הזמן
+      var due = t.remindAt <= nowIso;
+      meta.appendChild(chip('⏰ ' + (remindDay(t) === td ? timeOf(t.remindAt) : whenLabel(t.remindAt)) + (due ? ' · הגיע הזמן' : ''), due ? 'late' : 'remind'));
+    }
     if (t.priority === 'high' && active && mode !== 'mine') meta.appendChild(chip('דחוף', 'urgent'));
-    if (t.dueDate && active) { var d = dueLabel(t.dueDate); meta.appendChild(chip(d.text, d.cls)); }
-    if (t.remindAt && !t.remindSent && active && t.remindAt > new Date().toISOString()) meta.appendChild(chip('⏰ ' + whenLabel(t.remindAt), 'remind'));
+    if (t.dueDate && active && !(mode === 'today' && t.dueDate === td)) { var d = dueLabel(t.dueDate); meta.appendChild(chip(d.text, d.cls)); }
+    if (mode !== 'today' && t.remindAt && !t.remindSent && active && t.remindAt > nowIso) meta.appendChild(chip('⏰ ' + (remindDay(t) === t.dueDate ? timeOf(t.remindAt) : whenLabel(t.remindAt)), 'remind'));
     if (t.seriesId) meta.appendChild(chip('🔁', ''));
-    if ((mode === 'mine' || mode === 'pending') && t.createdById !== me) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
+    if ((mode === 'mine' || mode === 'pending' || mode === 'today' || mode === 'future') && t.createdById !== me) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
     if (mode === 'given' || (mode === 'history' && t.assigneeId !== me)) meta.appendChild(chip('אצל ' + uname(t.assigneeId), ''));
     if (mode === 'team' && t.createdById !== t.assigneeId) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
     if (mode === 'given' || mode === 'team') {
@@ -1042,7 +1053,7 @@
       if (t.status === 'rejected') meta.appendChild(chip('✗ לא התקבלה: ' + t.reason, 'late'));
       if (t.status === 'returned') meta.appendChild(chip('↩ הוחזרה: ' + t.reason, 'late'));
     }
-    if (t.status === 'open') { var a = ageInfo(t); meta.appendChild(chip(a.text, a.cls)); }
+    if (t.status === 'open') { var a = ageInfo(t); if (a.short) { var ac = chip(a.short, a.cls); ac.title = a.text; ac.setAttribute('aria-label', a.text); meta.appendChild(ac); } }
     if (t.status === 'done' && mode !== 'mine') {
       var took = dayDiff(isoDay(t.createdAt), isoDay(t.doneAt));
       meta.appendChild(chip('✓ בוצעה ' + whenShort(t.doneAt) + (mode === 'history' ? ' · ' + (took <= 0 ? 'באותו יום' : 'תוך ' + daysWord(took)) : ''), 'okc'));
@@ -1059,7 +1070,8 @@
     else if (nc) meta.appendChild(chip('💬 ' + nc, ''));
     if (V.pending[t.id]) meta.appendChild(chip('⏳ ממתין לשמירה', 'pend'));
 
-    var body = h('div', { class: 'body' }, [h('div', { class: 'ttl', text: t.title }), meta]);
+    var prName = { high: 'דחוף', normal: 'רגיל', low: 'לא דחוף' }[prOf(t)];
+    var body = h('div', { class: 'body' }, [h('div', { class: 'ttl' }, [h('span', { class: 'pdot p-' + prOf(t), title: prName, 'aria-label': prName }), t.title]), meta]);
     add(li, [check, body]);
     if (mode === 'pending') {
       body.appendChild(h('div', { class: 'card-acts' }, [
@@ -1341,7 +1353,7 @@
         btn('secondary', '✗ לא יכול/ה לקבל', function () { openSheet(reasonSheet(id, 'reject')); });
       } else if (t.status === 'open') {
         btn('ok', '✓ בוצע', function () { closeSheet(); toggleDone(id); });
-        if (isAssignee && myOpen().list.length > 1 && myOpen().groups[prOf(t)][0] && myOpen().groups[prOf(t)][0].id !== id) {
+        if (isAssignee && !taskDay(t) && myOpen().list.length > 1 && myOpen().groups[prOf(t)][0] && myOpen().groups[prOf(t)][0].id !== id) {
           btn('secondary', '⬆ לראש הרשימה', function () { moveToTop(id); closeSheet(); toast('הועברה לראש הקבוצה'); });
         }
         if (isAssignee && !isCreator) btn('secondary', '↩ החזרה למי שנתן', function () { openSheet(reasonSheet(id, 'return')); });
@@ -1907,20 +1919,21 @@
         t && t.assigneeId !== S.me.id ? null : h('p', { class: 'small hint-assign hidden', text: 'המשימה תגיע אליו/ה לאישור.' })]));
       sel.addEventListener('change', function () { var hnt = el.querySelector('.hint-assign'); if (hnt) hnt.classList.toggle('hidden', sel.value === S.me.id); });
 
-      var td = today(), tm = addDays(td, 1), th = nextThursday();
-      var dueOpts = [['', 'בלי תאריך'], [td, 'היום'], [tm, 'מחר']];
-      if (th !== td && th !== tm) dueOpts.push([th, 'עד חמישי']);
-      dueOpts.push(['pick', '📅 תאריך…']);
+      // "למתי" = היום שבו רוצים לראות את המשימה ולטפל בה. משימה לתאריך עתידי מחכה ב"משימות עתידיות".
+      var td = today(), tm = addDays(td, 1);
+      var dueOpts = [['', 'בלי תאריך'], [td, 'היום'], [tm, 'מחר'], ['pick', '📅 תאריך…']];
       var preset2 = dueOpts.some(function (o) { return o[0] === st.dueDate; });
-      var dateIn = h('input', { type: 'date', class: preset2 ? 'hidden' : '', value: preset2 ? '' : st.dueDate, min: td, 'aria-label': 'תאריך יעד' });
+      var dateIn = h('input', { type: 'date', class: preset2 ? 'hidden' : '', value: preset2 ? '' : st.dueDate, min: td, 'aria-label': 'למתי' });
       dateIn.style.marginTop = '8px';
       var picked = preset2 ? st.dueDate : 'pick';
-      var dueField = h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'עד מתי' }),
+      var dueHint = h('p', { class: 'small' + (st.dueDate > td ? '' : ' hidden'), text: 'עד היום הזה המשימה מחכה למטה, ב"משימות עתידיות", ולא מעמיסה על הרשימה.' });
+      var dueField = h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למתי' }),
         optChips(dueOpts, picked, function (v) {
           picked = v;
           dateIn.classList.toggle('hidden', v !== 'pick');
           if (v === 'pick') { if (!dateIn.value) dateIn.value = addDays(td, 2); try { dateIn.showPicker(); } catch (e) { dateIn.focus(); } }
-        }), dateIn]);
+          dueHint.classList.toggle('hidden', !(v === 'pick' || v > td));
+        }), dateIn, dueHint]);
       el.appendChild(dueField);
 
       // תוספות (נפתחות בלחיצה)
@@ -2027,7 +2040,9 @@
             return;
           }
           closeSheet();
-          toast(other ? 'המשימה נשלחה ל' + uname(fields.assigneeId) + ' לאישור ✓' : 'המשימה נוספה ✓');
+          var fut = isFuture({ dueDate: due, remindAt: remind });
+          toast(other ? 'המשימה נשלחה ל' + uname(fields.assigneeId) + ' לאישור ✓'
+            : fut ? 'המשימה נוספה ✓ היא מחכה ב"משימות עתידיות" עד ' + dueLabel(taskDay({ dueDate: due, remindAt: remind })).text.replace(/^ל-?/, '') : 'המשימה נוספה ✓');
         } else {
           var ch = {};
           Object.keys(fields).forEach(function (k) { if ((t[k] || '') !== fields[k]) ch[k] = fields[k]; });
@@ -2078,7 +2093,6 @@
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'טלפון: ' }), h('span', { class: 'ltr', text: prettyPhone(u.phone) || 'לא נשמר' })]));
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
-      if (u.calendarEmail || u.calendarOn) el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'יומן: ' }), (u.calendarOn ? 'מחובר' : 'לא מחובר') + (u.calendarEmail ? ' (' + u.calendarEmail + ')' : '')]));
       var st = userStatus(u);
       if (st) el.appendChild(h('div', { class: 'msg bad', text: st }));
 
@@ -2213,7 +2227,6 @@
     var self = u && u.id === S.me.id;
     var name = h('input', { type: 'text', maxlength: '40', placeholder: 'למשל: משה כהן', autocomplete: 'off', value: u ? u.name : '' });
     var phone = h('input', { type: 'tel', class: 'ltr', inputmode: 'tel', placeholder: '050-1234567', autocomplete: 'off', value: u ? prettyPhone(u.phone) : '' });
-    var gmail = h('input', { type: 'email', class: 'ltr', inputmode: 'email', placeholder: 'name@gmail.com (לא חובה)', autocomplete: 'off', value: u ? (u.calendarEmail || '') : '' });
     var msg = h('div', { class: 'msg bad hidden' });
     el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'שם' }), name]));
     el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'טלפון נייד' }), phone]));
@@ -2221,13 +2234,12 @@
       el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'תפקיד' }),
         optChips([['employee', 'עובד'], ['manager', 'מנהל (רואה הכל)']], role, function (v) { role = v; })]));
     }
-    el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'כתובת Gmail (רק אם רוצים לחבר את היומן הראשי שלו)' }), gmail]));
     el.appendChild(msg);
     var btn = h('button', { class: 'btn block', type: 'button', text: btnText });
     btn.addEventListener('click', function () {
       msg.classList.add('hidden');
       if (!name.value.trim()) { msg.textContent = ERR.no_name; msg.classList.remove('hidden'); return; }
-      var req = { name: name.value, calendarEmail: gmail.value.trim() };
+      var req = { name: name.value };
       if (phone.value.trim() || !u) req.phone = phone.value;
       if (!self) req.role = role;
       busy(btn, true, 'שומר…');
@@ -2345,42 +2357,6 @@
     return box;
   }
 
-  function calendarBox() {
-    var box = h('div', { class: 'box' }, [h('h3', { text: '📅 חיבור יומן Google (רשות)' })]);
-    if (S.me.calendarId) {
-      box.appendChild(h('p', { class: 'ok-text', text: '✓ מחובר: ' + S.me.calendarId }));
-      box.appendChild(h('p', { class: 'small', text: 'הפגישות של היום מופיעות בראש הלשונית "שלי". רק את/ה רואה אותן.' }));
-      var off = h('button', { class: 'btn secondary', type: 'button', text: 'ניתוק היומן', onclick: function () {
-        busy(off, true);
-        api('calendarSet', { calendarId: '' }).then(function (r) {
-          busy(off, false);
-          if (r.ok) { S.me = r.me; sset('me', S.me); S.meet = null; sdel('meet'); toast('היומן נותק'); render(); } else toast(errText(r));
-        });
-      } });
-      box.appendChild(off);
-      box.appendChild(h('p', { class: 'small', text: 'כדי לבטל לגמרי את השיתוף: ביומן Google ← הגדרות ← היומן ← שיתוף ← להסיר את חשבון העמותה.' }));
-      return box;
-    }
-    box.appendChild(h('p', { text: 'אפשר לראות כאן את הפגישות של היום מהיומן שלך. האפליקציה רק קוראת, לא משנה.' }));
-    box.appendChild(h('ol', { class: 'steps' }, [
-      h('li', { text: 'מומלץ: ליצור ביומן Google יומן נפרד בשם "עבודה", כדי שהיומן האישי יישאר פרטי.' }),
-      h('li', { text: 'ביומן Google במחשב: ⚙ הגדרות ← בוחרים את היומן ← "שיתוף עם אנשים ספציפיים" ← מוסיפים את d.orothatora@gmail.com ← "הצגת כל פרטי האירוע".' }),
-      h('li', { text: 'באותו מסך, למטה ב"שילוב היומן", מעתיקים את "מזהה היומן" ומדביקים כאן.' })
-    ]));
-    box.appendChild(h('p', { class: 'small', text: 'שימו לב: מי שנכנס לחשבון העמותה יכול לראות את היומן ששיתפתם. יומן ראשי (כתובת ה-Gmail) אפשר לחבר רק אם המנהל רשם אותה אצלכם.' }));
-    var inp = h('input', { type: 'email', class: 'ltr', placeholder: 'מזהה היומן', 'aria-label': 'מזהה היומן' });
-    var go = h('button', { class: 'btn', type: 'button', text: 'חיבור', onclick: function () {
-      if (!inp.value.trim()) { inp.focus(); return; }
-      busy(go, true, 'בודק…');
-      api('calendarSet', { calendarId: inp.value.trim() }).then(function (r) {
-        busy(go, false);
-        if (r.ok) { S.me = r.me; sset('me', S.me); toast('היומן חובר ✓'); loadMeetings(true); render(); } else toast(errText(r));
-      });
-    } });
-    box.appendChild(h('div', { class: 'two' }, [inp, go]));
-    return box;
-  }
-
   function quotesSheet() {
     return function (el) {
       sheetHead(el, '💬 משפטי השראה');
@@ -2434,7 +2410,6 @@
       var ib = installBox();
       if (ib) el.appendChild(ib);
       el.appendChild(pushBox());
-      el.appendChild(calendarBox());
       var links = h('div', { class: 'actions' });
       links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '🔁 משימות חוזרות', onclick: function () { openSheet(seriesListSheet()); } }));
       if (isMgr()) links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '💬 משפטי השראה', onclick: function () { openSheet(quotesSheet()); } }));
