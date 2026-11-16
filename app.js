@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.1.0';
+  var APP_VERSION = '2.1.1';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -766,7 +766,10 @@
 
   // ---------------------------------------------------------------- "שלי"
   var CHEER_DONE = ['יישר כח!', 'כל הכבוד, יום פורה!', 'עבודה ברוכה, תודה רבה!', 'מצוין! עוד צעד קדימה.', 'ישר כוחך, רואים את ההשקעה.'];
+  // משפטי השראה מושבתים כרגע לפי החלטת דוד (16.11). המשפטים נשמרים בשרת; כדי להחזיר: true
+  var SHOW_QUOTES = false;
   function todayQuote() {
+    if (!SHOW_QUOTES) return null;
     var q = S.data.quotes || [];
     if (!q.length) return null;
     var n = Math.max(1, (S.data.settings && S.data.settings.quoteDays) || 1);
@@ -2412,7 +2415,7 @@
       el.appendChild(pushBox());
       var links = h('div', { class: 'actions' });
       links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '🔁 משימות חוזרות', onclick: function () { openSheet(seriesListSheet()); } }));
-      if (isMgr()) links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '💬 משפטי השראה', onclick: function () { openSheet(quotesSheet()); } }));
+      if (isMgr() && SHOW_QUOTES) links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '💬 משפטי השראה', onclick: function () { openSheet(quotesSheet()); } }));
       el.appendChild(links);
       el.appendChild(h('div', { class: 'box' }, [
         h('h3', { text: '💻 כניסה ממכשיר נוסף' }),
