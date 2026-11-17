@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.5.1';
+  var APP_VERSION = '2.5.2';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -1184,14 +1184,33 @@
       list.forEach(function (t) { ul.appendChild(card(t, 'given', false)); });
       el.appendChild(ul);
     }
-    if (!back.length && !late.length && !waiting.length && !working.length) {
+    var active = back.concat(late, waiting, working);
+    if (!active.length) {
       el.appendChild(h('div', { class: 'empty' }, ['אין משימות פתוחות שנתתם לאחרים.', h('br'),
         h('span', { class: 'small', text: 'כדי לתת משימה, לוחצים + ובוחרים "למי".' })]));
+    } else {
+      // מיון: לפי מצב (ברירת מחדל) או לפי עובד. הבחירה נשמרת במכשיר.
+      var by = sget('givenBy', 'status');
+      el.appendChild(h('div', { class: 'given-sort' }, [h('span', { class: 'lbl', text: 'מיון:' }),
+        optChips([['status', 'לפי מצב'], ['user', '👤 לפי עובד']], by, function (v) { sset('givenBy', v); renderView(); })]));
+      if (by === 'user') {
+        var rank = function (t) { return t.status === 'rejected' || t.status === 'returned' ? 0 : t.status === 'pending' ? (acceptLate(t) ? 1 : 2) : 3; };
+        var people = {};
+        active.forEach(function (t) { (people[t.assigneeId] = people[t.assigneeId] || []).push(t); });
+        Object.keys(people).map(function (id) { return { id: id, name: uname(id) }; }).sort(byName).forEach(function (p) {
+          var list = people[p.id].sort(function (a, b) { return (rank(a) - rank(b)) || autoCmp(a, b); });
+          el.appendChild(h('div', { class: 'grp-h grp-user', text: '👤 ' + p.name + ' (' + list.length + ')' }));
+          var ul = h('ul', { class: 'list', 'data-list': 'by-user', 'data-user': p.id });
+          list.forEach(function (t) { ul.appendChild(card(t, 'given', false)); });
+          el.appendChild(ul);
+        });
+      } else {
+        section('↩ חזרו אליך – צריך להחליט', back, 'back');
+        section('⏰ עבר יום ועדיין לא אושרו', late, 'late');
+        section('ממתינות לאישור', waiting, 'waiting');
+        section('התקבלו – בעבודה', working, 'working');
+      }
     }
-    section('↩ חזרו אליך – צריך להחליט', back, 'back');
-    section('⏰ עבר יום ועדיין לא אושרו', late, 'late');
-    section('ממתינות לאישור', waiting, 'waiting');
-    section('התקבלו – בעבודה', working, 'working');
     doneSection(el, 'בוצעו בשבוע האחרון (#)', done, 'given', 'done');
   }
 
@@ -2589,17 +2608,37 @@
       var u = user(uid);
       if (!u) { sheetHead(el, 'העובד לא נמצא'); return; }
       var self = u.id === S.me.id;
+      // למעלה רק השם, אחריו המשימות. פרטים, פעולות והעברת משימות – בסוף הדף (בקשת דוד).
       sheetHead(el, u.name + (self ? ' (אני)' : ''));
-      el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'טלפון: ' }), h('span', { class: 'ltr', text: prettyPhone(u.phone) || 'לא נשמר' })]));
+      var c = counts(u.id);
+      el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'משימות פתוחות (' + c.open.length + ')' })]));
+      if (!c.open.length) el.appendChild(h('p', { class: 'small', text: 'אין משימות פתוחות.' }));
+      else {
+        var ul = h('ul', { class: 'list sub-list' });
+        c.open.sort(autoCmp).forEach(function (t) { ul.appendChild(card(t, 'team', false)); });
+        el.appendChild(ul);
+      }
+      var done = doneOn(today(), u.id);
+      if (done.length) {
+        el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'בוצעו היום (' + done.length + ')' })]));
+        var ul2 = h('ul', { class: 'list sub-list' });
+        done.forEach(function (t) { ul2.appendChild(card(t, 'team', false)); });
+        el.appendChild(ul2);
+      }
+
+      var det = h('div', { class: 'box user-details' });
+      det.appendChild(h('h3', { text: 'פרטים ופעולות' }));
+      det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'טלפון: ' }), h('span', { class: 'ltr', text: prettyPhone(u.phone) || 'לא נשמר' })]));
       if (u.noApp) {
-        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '📵 ' }), 'בלי אפליקציה – המשימות שלו מודפסות']));
-        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי/ת: ' }), u.supervisorId ? uname(u.supervisorId) : 'עוד לא נקבע']));
+        det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '📵 ' }), 'בלי אפליקציה – המשימות שלו מודפסות']));
+        det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי/ת: ' }), u.supervisorId ? uname(u.supervisorId) : 'עוד לא נקבע']));
       } else {
-        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
-        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
+        det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
+        det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
       }
       var st = userStatus(u);
-      if (st) el.appendChild(h('div', { class: 'msg bad', text: st }));
+      if (st) det.appendChild(h('div', { class: 'msg bad', text: st }));
+      el.appendChild(det);
 
       var acts = h('div', { class: 'actions' });
       if (u.active && u.noApp) {
@@ -2616,10 +2655,9 @@
           onclick: function (e) { toggleActive(u, e.currentTarget); }
         }));
       }
-      el.appendChild(acts);
-      if (!u.noApp) el.appendChild(h('p', { class: 'small', text: '"קוד הזמנה חדש" משמש לכניסה ראשונה, לטלפון חדש, או כשהכניסה ננעלה.' }));
+      det.appendChild(acts);
+      if (!u.noApp) det.appendChild(h('p', { class: 'small', text: '"קוד הזמנה חדש" משמש לכניסה ראשונה, לטלפון חדש, או כשהכניסה ננעלה.' }));
 
-      var c = counts(u.id);
       var openAll = V.tasks.filter(function (t) { return t.assigneeId === u.id && isActive(t); });
       if (openAll.length && !self) {
         var to = h('select', { 'aria-label': 'למי להעביר' });
@@ -2636,20 +2674,6 @@
         } });
         el.appendChild(h('div', { class: 'box' }, [h('h3', { text: 'העברת כל המשימות הפתוחות (' + openAll.length + ')' }),
           h('p', { class: 'small', text: 'למשל כשעובד עוזב. המשימות יגיעו לאישור של מי שמקבל אותן.' }), h('div', { class: 'two' }, [to, tb])]));
-      }
-      el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'משימות פתוחות (' + c.open.length + ')' })]));
-      if (!c.open.length) el.appendChild(h('p', { class: 'small', text: 'אין משימות פתוחות.' }));
-      else {
-        var ul = h('ul', { class: 'list sub-list' });
-        c.open.sort(autoCmp).forEach(function (t) { ul.appendChild(card(t, 'team', false)); });
-        el.appendChild(ul);
-      }
-      var done = doneOn(today(), u.id);
-      if (done.length) {
-        el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'בוצעו היום (' + done.length + ')' })]));
-        var ul2 = h('ul', { class: 'list sub-list' });
-        done.forEach(function (t) { ul2.appendChild(card(t, 'team', false)); });
-        el.appendChild(ul2);
       }
     });
   }
