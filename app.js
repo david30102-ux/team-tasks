@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.3.1';
+  var APP_VERSION = '2.3.2';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -1045,12 +1045,16 @@
   function card(t, mode, draggable) {
     var me = S.me.id;
     var li = h('li', { class: 'task p-' + prOf(t) + ' is-' + t.status, 'data-id': t.id });
-    var canCheck = (t.status === 'open' || t.status === 'done') && mode !== 'history' && mode !== 'pending';
+    // רק מי שהמשימה שלו מסמן "בוצע" (או מבטל)
+    var canCheck = (t.status === 'open' || t.status === 'done') && mode !== 'history' && mode !== 'pending' && t.assigneeId === me;
     var check = h('button', {
       class: 'check', type: 'button', 'aria-label': t.status === 'done' ? 'החזרה לפתוחות' : 'סימון כבוצע'
     }, h('span', { class: 'ring', text: t.status === 'done' ? '✓' : '' }));
     if (canCheck) check.addEventListener('click', function (e) { e.stopPropagation(); toggleDone(t.id); });
-    else check.disabled = true;
+    else {
+      check.disabled = true;
+      if (t.assigneeId !== me && t.status === 'open') check.title = 'רק ' + uname(t.assigneeId) + ' יכול/ה לסמן שהמשימה בוצעה';
+    }
 
     var meta = h('div', { class: 'meta' });
     var active = t.status === 'open' || t.status === 'pending';
@@ -1124,6 +1128,7 @@
   function toggleDone(id) {
     var t = task(id);
     if (!t) return;
+    if (t.assigneeId !== S.me.id) { toast('רק ' + uname(t.assigneeId) + ' יכול/ה לסמן שהמשימה בוצעה.'); return; }
     if (t.status === 'open' || t.status === 'pending') {
       queue({ type: 'done', id: id });
       toast(CHEERS[Math.floor(Math.random() * CHEERS.length)], 'ביטול', function () { queue({ type: 'reopen', id: id }); });
@@ -1447,7 +1452,7 @@
         btn('ok', '✓ מקבל/ת את המשימה', function () { acceptTask(id); });
         btn('secondary', '✗ לא יכול/ה לקבל', function () { openSheet(reasonSheet(id, 'reject')); });
       } else if (t.status === 'open') {
-        btn('ok', '✓ בוצע', function () { closeSheet(); toggleDone(id); });
+        if (isAssignee) btn('ok', '✓ בוצע', function () { closeSheet(); toggleDone(id); });
         if (isAssignee && !taskDay(t) && myOpen().list.length > 1 && myOpen().groups[prOf(t)][0] && myOpen().groups[prOf(t)][0].id !== id) {
           btn('secondary', '⬆ לראש הרשימה', function () { moveToTop(id); closeSheet(); toast('הועברה לראש הקבוצה'); });
         }
