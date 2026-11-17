@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.3.2';
+  var APP_VERSION = '2.4.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -734,11 +734,74 @@
   function renderView() {
     var el = $('view');
     var keep = histKeep();
+    searchBar();
     el.textContent = '';
-    if (S.tab === 'given') viewGiven(el);
+    var q = (LQ[S.tab] || '').trim();
+    if (q && (S.tab !== 'team' || isMgr())) viewSearch(el, q);
+    else if (S.tab === 'given') viewGiven(el);
     else if (S.tab === 'team' && isMgr()) viewTeam(el);
     else if (S.tab === 'history') viewHistory(el, keep);
     else viewMine(el);
+  }
+
+  // ---------------------------------------------------------------- חיפוש ב"שלי" / "נתתי" / "צוות"
+  // תיבת החיפוש יושבת מחוץ ל-#view, כך שעדכון הרשימה לא סוגר את המקלדת באמצע הקלדה.
+  var LQ = { mine: '', given: '', team: '' };
+  var LQ_PH = { mine: '🔍 חיפוש במשימות שלי', given: '🔍 חיפוש במשימות שנתתי', team: '🔍 חיפוש בכל משימות הצוות' };
+  function searchBar() {
+    var wrap = $('searchWrap'), qi = $('listQ'), x = $('listQx');
+    var on = LQ.hasOwnProperty(S.tab) && (S.tab !== 'team' || isMgr());
+    wrap.classList.toggle('hidden', !on);
+    if (!on) return;
+    if (!qi.getAttribute('data-wired')) {
+      qi.setAttribute('data-wired', '1');
+      qi.addEventListener('input', function () { LQ[qi.getAttribute('data-tab')] = qi.value; x.classList.toggle('hidden', !qi.value); renderView(); });
+      qi.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') qi.blur(); // סוגר את המקלדת ומשאיר את התוצאות
+        if (e.key === 'Escape') clearQ();
+      });
+      x.addEventListener('click', function () { clearQ(); qi.focus(); });
+    }
+    if (qi.getAttribute('data-tab') !== S.tab) {
+      qi.setAttribute('data-tab', S.tab);
+      qi.value = LQ[S.tab];
+      qi.placeholder = LQ_PH[S.tab];
+    }
+    x.classList.toggle('hidden', !qi.value);
+  }
+  function clearQ() {
+    var qi = $('listQ');
+    qi.value = '';
+    LQ[qi.getAttribute('data-tab')] = '';
+    $('listQx').classList.add('hidden');
+    renderView();
+  }
+  function norm(s) { return String(s || '').toLowerCase().replace(/[֑-ׇ]/g, ''); } // בלי ניקוד וטעמים
+  /** תוצאות חיפוש: בשם, בהערה, בשם האחראי ובשם מי שנתן. כל המילים צריכות להופיע. */
+  function viewSearch(el, q) {
+    var me = S.me.id, words = norm(q).split(/\s+/).filter(Boolean);
+    var hits = V.tasks.filter(function (t) {
+      if (S.tab === 'mine' && t.assigneeId !== me) return false;
+      if (S.tab === 'given' && (t.createdById !== me || t.assigneeId === me)) return false;
+      var hay = norm(t.title + ' ' + (t.note || '') + ' ' + uname(t.assigneeId) + ' ' + uname(t.createdById));
+      return words.every(function (w) { return hay.indexOf(w) >= 0; });
+    });
+    var rank = { pending: 0, rejected: 0, returned: 0, open: 1, done: 2, cancelled: 3 };
+    hits.sort(function (a, b) {
+      return ((rank[a.status] || 0) - (rank[b.status] || 0)) ||
+        (a.status === 'done' || a.status === 'cancelled' ? (b.doneAt || b.updatedAt || '').localeCompare(a.doneAt || a.updatedAt || '') : autoCmp(a, b));
+    });
+    if (!hits.length) el.appendChild(h('div', { class: 'empty', text: 'לא נמצאו משימות עם "' + q + '".' }));
+    else {
+      el.appendChild(h('div', { class: 'sec' }, [h('span', { text: hits.length === 1 ? 'נמצאה משימה אחת' : 'נמצאו ' + hits.length + ' משימות' })]));
+      var ul = h('ul', { class: 'list', 'data-list': 'search' });
+      hits.forEach(function (t) { ul.appendChild(card(t, 'search', false)); });
+      el.appendChild(ul);
+    }
+    el.appendChild(h('p', { class: 'search-note' }, ['משימות ישנות שבוצעו או בוטלו? ',
+      h('button', { class: 'link-btn', type: 'button', text: 'לחפש גם בהיסטוריה', onclick: function () {
+        H.q = q; S.tab = 'history'; sset('tab', S.tab); render(); window.scrollTo(0, 0);
+      } })]));
   }
 
   // ---------------------------------------------------------------- מיון
@@ -1067,10 +1130,10 @@
     if (t.dueDate && active && !(mode === 'today' && t.dueDate === td)) { var d = dueLabel(t.dueDate); meta.appendChild(chip(d.text, d.cls)); }
     if (mode !== 'today' && t.remindAt && !t.remindSent && active && t.remindAt > nowIso) meta.appendChild(chip('⏰ ' + (remindDay(t) === t.dueDate ? timeOf(t.remindAt) : whenLabel(t.remindAt)), 'remind'));
     if (t.seriesId) meta.appendChild(chip('🔁', ''));
-    if ((mode === 'mine' || mode === 'pending' || mode === 'today' || mode === 'future') && t.createdById !== me) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
-    if (mode === 'given' || (mode === 'history' && t.assigneeId !== me)) meta.appendChild(chip('אצל ' + uname(t.assigneeId), ''));
+    if ((mode === 'mine' || mode === 'pending' || mode === 'today' || mode === 'future' || mode === 'search') && t.createdById !== me) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
+    if (mode === 'given' || ((mode === 'history' || mode === 'search') && t.assigneeId !== me)) meta.appendChild(chip('אצל ' + uname(t.assigneeId), ''));
     if (mode === 'team' && t.createdById !== t.assigneeId) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
-    if (mode === 'given' || mode === 'team') {
+    if (mode === 'given' || mode === 'team' || mode === 'search') {
       if (t.status === 'pending') meta.appendChild(acceptLate(t) ? chip('⏰ עבר יום ועדיין לא אושרה', 'late') : chip('ממתינה לאישור', 'pend'));
       if (t.status === 'pending' && t.notifyAt) meta.appendChild(chip('🔕 התראה אליו ' + whenLabel(t.notifyAt), 'remind'));
       if (t.status === 'rejected') meta.appendChild(chip('✗ לא התקבלה: ' + t.reason, 'late'));

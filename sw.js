@@ -1,7 +1,7 @@
 // Service worker: שומר את קבצי האפליקציה בטלפון (נפתחת מהר גם בלי רשת), מציג התראות שמגיעות מ-Firebase
 // כשהאפליקציה סגורה, ומקבל "שיתוף" מוואטסאפ באנדרואיד.
 // בכל עדכון של האפליקציה מעלים את VERSION (חייב להיות זהה ל-APP_VERSION ב-app.js).
-var VERSION = '2.3.2';
+var VERSION = '2.4.0';
 var CACHE = 'tt-' + VERSION;
 var SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 

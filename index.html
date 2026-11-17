@@ -317,6 +317,13 @@
   .cmt-new textarea { min-height: 46px; resize: none; flex: 1; }
 
   /* ---------- היסטוריה, הגדרות ---------- */
+  .search-wrap { position: relative; margin: 10px 0 4px; }
+  .search-wrap input { background: var(--card); min-height: 44px; padding-block: 9px; padding-inline-end: 44px; }
+  .search-clear {
+    position: absolute; inset-inline-end: 4px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px;
+    border: 0; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; border-radius: 10px;
+  }
+  .search-note { text-align: center; color: var(--muted); font-size: 14px; margin: 12px 0 0; }
   .hist-bar { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
   .hist-bar input { flex: 2 1 200px; }
   .hist-bar select { flex: 1 1 120px; }
@@ -344,7 +351,14 @@
     <div id="banner" class="banner hidden"></div>
     <nav id="tabs" class="tabs" role="tablist"></nav>
   </div>
-  <main id="view"></main>
+  <main>
+    <!-- חיפוש ב"שלי" / "נתתי" / "צוות": מחוץ ל-#view כדי שהמקלדת לא תיסגר כשהרשימה מתעדכנת -->
+    <div id="searchWrap" class="search-wrap hidden" role="search">
+      <input id="listQ" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" placeholder="🔍 חיפוש משימה" aria-label="חיפוש משימה">
+      <button id="listQx" class="search-clear hidden" type="button" aria-label="ניקוי החיפוש">✕</button>
+    </div>
+    <div id="view"></div>
+  </main>
   <button id="fab" class="fab" type="button" aria-label="משימה חדשה">+</button>
 </div>
 
