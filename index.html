@@ -258,6 +258,13 @@
   }
   .future-btn .chev { font-size: 16px; }
   ul[data-list=future] .task { opacity: .85; }
+  /* משימה שבוצעה: מחליקים הצידה כדי להסיר מהמסך (גלילה למעלה/למטה נשארת רגילה) */
+  .task.swipe { touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+  .task.swiping { position: relative; z-index: 2; box-shadow: 0 6px 18px rgba(0,0,0,.15); cursor: grabbing; }
+  .swipe-tip { text-align: center; color: var(--muted); margin: 6px 0 0; }
+  /* כרטיס שמוחלק לא יגרום לכל המסך לזוז הצידה */
+  ul[data-list=done] { overflow-x: hidden; padding-block: 4px; margin-block: -4px; }
+  @supports (overflow-x: clip) { ul[data-list=done] { overflow-x: clip; padding-block: 0; margin-block: 0; } }
   .chip.remind { color: var(--brand); }
   .chip.newc { color: var(--brand); font-weight: 800; }
   .card-acts { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }

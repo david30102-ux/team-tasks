@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.3.0';
+  var APP_VERSION = '2.3.1';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -878,13 +878,7 @@
         el.appendChild(ul);
       });
     }
-    var done = doneOn(today(), me);
-    if (done.length) {
-      el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'בוצעו היום (' + done.length + ') 👏' })]));
-      var ul2 = h('ul', { class: 'list', 'data-list': 'done' });
-      done.forEach(function (t) { ul2.appendChild(card(t, 'mine', false)); });
-      el.appendChild(ul2);
-    }
+    doneSection(el, 'בוצעו היום (#) 👏', doneOn(today(), me), 'mine', 'done');
     if (o.future.length) {
       var showF = !!sget('showFuture', false);
       el.appendChild(h('button', { class: 'future-btn', type: 'button', 'aria-expanded': showF ? 'true' : 'false', onclick: function () { sset('showFuture', !showF); render(); } },
@@ -928,7 +922,7 @@
     section('⏰ עבר יום ועדיין לא אושרו', late, 'late');
     section('ממתינות לאישור', waiting, 'waiting');
     section('התקבלו – בעבודה', working, 'working');
-    section('בוצעו בשבוע האחרון', done, 'done');
+    doneSection(el, 'בוצעו בשבוע האחרון (#)', done, 'given', 'done');
   }
 
   // ---------------------------------------------------------------- "צוות" (מנהל)
@@ -1141,6 +1135,79 @@
   function acceptTask(id) {
     queue({ type: 'accept', id: id });
     toast('המשימה התקבלה ✓ היא ברשימה שלך.');
+  }
+
+  // ---------------------------------------------------------------- הסרת משימות שבוצעו מהמסך (נשמר במכשיר; המשימה נשארת בהיסטוריה)
+  function isHid(t) { var m = sget('hidDone', {}); return !!m[t.id] && m[t.id] === t.doneAt; }
+  function hideDone(list) {
+    var m = sget('hidDone', {}), now = Date.now(), cut = new Date(now - 30 * 864e5).toISOString();
+    Object.keys(m).forEach(function (k) { if (!m[k] || m[k] < cut) delete m[k]; }); // ניקוי ישנים
+    list.forEach(function (t) { m[t.id] = t.doneAt; });
+    sset('hidDone', m);
+    sset('swipeTip', 1);
+    render();
+    toast(list.length === 1 ? 'הוסר מהמסך. המשימה נשמרת ב"היסטוריה".' : 'הוסרו ' + list.length + ' משימות מהמסך. הן נשמרות ב"היסטוריה".', 'ביטול', function () {
+      var m2 = sget('hidDone', {});
+      list.forEach(function (t) { delete m2[t.id]; });
+      sset('hidDone', m2);
+      render();
+    });
+  }
+  /** החלקה הצידה (אצבע או עכבר) מסירה את הכרטיס. גלילה למעלה/למטה ממשיכה לעבוד רגיל. */
+  function enableSwipe(li, onGone) {
+    li.classList.add('swipe');
+    var x0 = null, y0 = 0, dx = 0, on = false, moved = false;
+    li.addEventListener('pointerdown', function (e) {
+      if (e.button) return;
+      x0 = e.clientX; y0 = e.clientY; dx = 0; on = false; moved = false;
+    });
+    li.addEventListener('pointermove', function (e) {
+      if (x0 === null) return;
+      var mx = e.clientX - x0, my = e.clientY - y0;
+      if (!on) {
+        if (Math.abs(mx) > 12 && Math.abs(mx) > Math.abs(my) * 1.5) {
+          on = true; moved = true; S.dragging = true;
+          li.classList.add('swiping');
+          try { li.setPointerCapture(e.pointerId); } catch (x) { /* לא נתמך */ }
+        } else if (Math.abs(my) > 12) { x0 = null; return; } else return;
+      }
+      dx = mx;
+      li.style.transform = 'translateX(' + dx + 'px)';
+      li.style.opacity = String(Math.max(0.15, 1 - Math.abs(dx) / li.offsetWidth));
+    });
+    function end() {
+      x0 = null;
+      if (!on) return;
+      on = false;
+      li.classList.remove('swiping');
+      var gone = Math.abs(dx) > li.offsetWidth * 0.3;
+      li.style.transition = 'transform .18s ease-out, opacity .18s';
+      li.style.transform = gone ? 'translateX(' + (dx > 0 ? 1 : -1) * li.offsetWidth * 1.2 + 'px)' : '';
+      li.style.opacity = gone ? '0' : '';
+      setTimeout(function () {
+        S.dragging = false;
+        if (gone) { S.renderLater = false; onGone(); }
+        else { li.style.transition = ''; if (S.renderLater) { S.renderLater = false; render(); } }
+      }, 190);
+    }
+    li.addEventListener('pointerup', end);
+    li.addEventListener('pointercancel', end);
+    // אחרי החלקה: לא לפתוח את המשימה ולא לבטל את ה-✓
+    li.addEventListener('click', function (e) { if (moved) { moved = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  }
+  function doneSection(el, title, list, mode, key) {
+    list = list.filter(function (t) { return !isHid(t); });
+    if (!list.length) return;
+    el.appendChild(h('div', { class: 'sec' }, [h('span', { text: title.replace('#', list.length) }),
+      h('button', { class: 'link-btn', type: 'button', text: 'ניקוי', 'aria-label': 'הסרת כל המשימות שבוצעו מהמסך', onclick: function () { hideDone(list); } })]));
+    var ul = h('ul', { class: 'list', 'data-list': key });
+    list.forEach(function (t) {
+      var li = card(t, mode, false);
+      enableSwipe(li, function () { hideDone([t]); });
+      ul.appendChild(li);
+    });
+    el.appendChild(ul);
+    if (!sget('swipeTip', 0)) el.appendChild(h('p', { class: 'small swipe-tip', text: '💡 מחליקים משימה שבוצעה הצידה כדי להסיר אותה מהמסך.' }));
   }
 
   /** "לראש הרשימה": לראש הקבוצה שלה (לפי דחיפות). */
