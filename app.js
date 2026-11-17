@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.2.0';
+  var APP_VERSION = '2.3.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -222,7 +222,7 @@
         Object.assign(t, op.fields);
         break;
       case 'accept':
-        if (t.status === 'pending') { t.status = 'open'; t.respondedAt = op.at; }
+        if (t.status === 'pending') { t.status = 'open'; t.respondedAt = op.at; t.notifyAt = ''; }
         if (t.seriesId) v.tasks.forEach(function (o) { if (o.seriesId === t.seriesId && o.assigneeId === me && o.status === 'pending') o.status = 'open'; });
         break;
       case 'reject': if (t.status === 'pending') { t.status = 'rejected'; t.reason = op.reason; t.rank = null; } break;
@@ -285,7 +285,7 @@
     bad_rule: 'הגדרת החזרה לא תקינה.',
     self: 'אי אפשר להשבית את עצמכם או לשנות את ההרשאה של עצמכם.',
     too_big: 'הקובץ גדול מדי (עד 10MB).',
-    bad_type: 'אפשר לצרף רק תמונות, הקלטות ו-PDF.',
+    bad_type: 'אפשר לצרף תמונות, הקלטות, PDF, Word, Excel, PowerPoint וקובצי טקסט.',
     bad_email: 'כתובת המייל לא תקינה.',
     bad_calendar: 'מזהה היומן לא תקין. הוא נראה כמו כתובת מייל.',
     calendar_not_allowed: 'אפשר לחבר יומן ראשי רק אם המנהל רשם אצלך את כתובת ה-Gmail הזו. אפשר לחבר יומן נוסף (מזהה שמסתיים ב-group.calendar.google.com).',
@@ -453,15 +453,29 @@
     });
   }
 
+  // מסמכים שמותר לצרף (חייב להתאים ל-DOC_MIMES בשרת)
+  var DOC_EXT = {
+    pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    txt: 'text/plain', csv: 'text/csv'
+  };
+  var DOC_ACCEPT = Object.keys(DOC_EXT).map(function (e) { return '.' + e; }).concat(Object.keys(DOC_EXT).map(function (e) { return DOC_EXT[e]; })).join(',');
+  function isDocMime(m) { return Object.keys(DOC_EXT).some(function (e) { return DOC_EXT[e] === m; }); }
+
   /** קובץ שנבחר/הוקלט → צרופה מוכנה {fid, blob, mime, name, kind, dur}. */
   function makeAttachment(file, dur) {
     var mime = String(file.type || '').split(';')[0].toLowerCase();
+    var ext = (String(file.name || '').match(/\.([a-z0-9]+)$/i) || [])[1];
+    ext = ext ? ext.toLowerCase() : '';
+    // טלפונים לפעמים לא יודעים את סוג הקובץ (ריק או octet-stream): לפי הסיומת
+    if ((!mime || mime === 'application/octet-stream' || !isDocMime(mime) && !/^(image|audio)\//.test(mime)) && DOC_EXT[ext]) mime = DOC_EXT[ext];
     if (/^image\//.test(mime) && mime !== 'image/gif') {
       return resizeImage(file, 1600, 0.82).then(function (b) {
         return { fid: rid(), blob: b, mime: 'image/jpeg', name: 'תמונה.jpg', kind: 'image', dur: 0 };
       });
     }
-    var kind = /^image\//.test(mime) ? 'image' : /^audio\//.test(mime) ? 'audio' : mime === 'application/pdf' ? 'pdf' : '';
+    var kind = /^image\/(jpeg|png|webp|gif)$/.test(mime) ? 'image' : /^audio\//.test(mime) ? 'audio' : mime === 'application/pdf' ? 'pdf' : isDocMime(mime) ? 'doc' : '';
     if (!kind) return Promise.reject(new Error(ERR.bad_type));
     if (file.size > 10 * 1024 * 1024) return Promise.reject(new Error(ERR.too_big));
     return Promise.resolve({ fid: rid(), blob: file, mime: mime, name: file.name || (kind === 'audio' ? 'הקלטה' : 'קובץ'), kind: kind, dur: dur || 0 });
@@ -1060,6 +1074,7 @@
     if (mode === 'team' && t.createdById !== t.assigneeId) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
     if (mode === 'given' || mode === 'team') {
       if (t.status === 'pending') meta.appendChild(acceptLate(t) ? chip('⏰ עבר יום ועדיין לא אושרה', 'late') : chip('ממתינה לאישור', 'pend'));
+      if (t.status === 'pending' && t.notifyAt) meta.appendChild(chip('🔕 התראה אליו ' + whenLabel(t.notifyAt), 'remind'));
       if (t.status === 'rejected') meta.appendChild(chip('✗ לא התקבלה: ' + t.reason, 'late'));
       if (t.status === 'returned') meta.appendChild(chip('↩ הוחזרה: ' + t.reason, 'late'));
     }
@@ -1073,7 +1088,7 @@
     var fl = (V.files[t.id] || []).concat(S.ups.filter(function (u) { return u.taskId === t.id; }));
     if (fl.some(function (f) { return f.kind === 'image'; })) meta.appendChild(chip('📷', ''));
     if (fl.some(function (f) { return f.kind === 'audio'; })) meta.appendChild(chip('🎤', ''));
-    if (fl.some(function (f) { return f.kind === 'pdf'; })) meta.appendChild(chip('📄', ''));
+    if (fl.some(function (f) { return f.kind === 'pdf' || f.kind === 'doc'; })) meta.appendChild(chip('📄', ''));
     var nc = (V.comments[t.id] || []).filter(function (c) { return c.kind !== 'system'; }).length;
     var un = unreadComments(t);
     if (un) meta.appendChild(chip(un === 'c' ? '💬 חדש' : '● עדכון חדש', 'newc'));
@@ -1350,6 +1365,9 @@
       if (t.remindAt && isActive(t)) {
         el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '⏰ תזכורת: ' }), whenLabel(t.remindAt) + (t.remindSent ? ' (נשלחה)' : '')]));
       }
+      if (t.notifyAt && t.status === 'pending' && !isAssignee) {
+        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '🔕 התראה אליו: ' }), whenLabel(t.notifyAt) + ' (המשימה כבר מופיעה אצלו באפליקציה)']));
+      }
       var ser = t.seriesId ? seriesById(t.seriesId) : null;
       if (t.seriesId) el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '🔁 חוזרת: ' }), ser ? ruleText(ser.rule) : 'החזרה הופסקה']));
       if (t.note) el.appendChild(h('div', { class: 'note-box', text: t.note }));
@@ -1442,7 +1460,15 @@
       a.addEventListener('click', function (e) {
         e.preventDefault();
         status.textContent = 'טוען…';
-        fileUrl(f).then(function (u) { status.textContent = ''; window.open(u, '_blank'); }, function (er) { status.textContent = er.message; });
+        fileUrl(f).then(function (u) {
+          status.textContent = '';
+          if (f.kind === 'pdf') { window.open(u, '_blank'); return; }
+          // Word/Excel/PowerPoint: הורדה עם השם המקורי, כדי שהטלפון יפתח אותו באפליקציה המתאימה
+          var dl = h('a', { href: u, download: f.name || 'קובץ', class: 'hidden' });
+          document.body.appendChild(dl);
+          dl.click();
+          setTimeout(function () { dl.remove(); }, 1000);
+        }, function (er) { status.textContent = er.message; });
       });
       box.appendChild(a);
     }
@@ -1473,7 +1499,7 @@
     return wrap;
   }
   function hasCamera() { return IS_IOS || IS_ANDROID || !!window.TT_FORCE_PHONE; }
-  /** כפתורי צירוף: בטלפון "צילום" (פותח את המצלמה ישר) ו"גלריה"; במחשב "תמונה או קובץ". ועוד "הקלטה". */
+  /** כפתורי צירוף: בטלפון "צילום" (פותח את המצלמה ישר), "גלריה" ו"קובץ"; במחשב "תמונה או קובץ". ועוד "הקלטה". */
   function pickers(onAttach, btnClass) {
     function inp(accept, capture) {
       var i = h('input', { type: 'file', accept: accept, multiple: capture ? null : true, capture: capture || null, class: 'hidden', 'aria-label': 'בחירת קובץ' });
@@ -1489,8 +1515,10 @@
       var cam = inp('image/*', 'environment'), gal = inp('image/*');
       out.push(cam, h('button', { class: btnClass, type: 'button', text: '📷 צילום', onclick: function () { cam.click(); } }));
       out.push(gal, h('button', { class: btnClass, type: 'button', text: '🖼️ גלריה', onclick: function () { gal.click(); } }));
+      var doc = inp(DOC_ACCEPT);
+      out.push(doc, h('button', { class: btnClass, type: 'button', text: '📎 קובץ', onclick: function () { doc.click(); } }));
     } else {
-      var any = inp('image/*,audio/*,application/pdf');
+      var any = inp('image/*,audio/*,' + DOC_ACCEPT);
       out.push(any, h('button', { class: btnClass, type: 'button', text: '📎 תמונה או קובץ', onclick: function () { any.click(); } }));
     }
     out.push(h('button', { class: btnClass, type: 'button', text: '🎤 הקלטה', onclick: function () { openSheet(recordSheet(onAttach)); } }));
@@ -1827,6 +1855,58 @@
     };
   }
 
+  /** הבוקר הבא שאינו שבת/חג, ב-8:30. */
+  function nextWorkMorning() {
+    var d = addDays(today(), 1);
+    while (holyDay(d)) d = addDays(d, 1);
+    var x = dateOf(d);
+    x.setHours(8, 30, 0, 0);
+    return x;
+  }
+  /** "מתי לשלוח לו התראה": מחר ב-8:30 (בלחיצה) או יום ושעה לבחירה. value(): ISO או null (שגיאה). */
+  function laterField() {
+    var td = today(), nm = nextWorkMorning();
+    var mode = 'morning';
+    var summary = h('p', { class: 'remind-sum' });
+    var dIn = h('input', { type: 'date', min: td, value: ymd(nm), 'aria-label': 'יום ההתראה' });
+    var tsel = timeSelect('08:30', false, upd);
+    dIn.addEventListener('change', upd);
+    var pick = h('div', { class: 'remind-pick hidden' }, [
+      h('span', { class: 'lbl', text: 'באיזה יום' }), dIn,
+      h('span', { class: 'lbl', style: 'margin-top:12px', text: 'באיזו שעה' }), tsel.el
+    ]);
+    function when() {
+      if (mode === 'morning') return nm;
+      if (!dIn.value) return null;
+      var d = dateOf(dIn.value), p = tsel.value().split(':');
+      d.setHours(+p[0], +p[1], 0, 0);
+      return d;
+    }
+    function upd() {
+      var d = when();
+      var past = d && d.getTime() < Date.now() + 60000;
+      summary.textContent = !d ? '' : past ? '⚠ הזמן הזה כבר עבר. בחרו זמן אחר.'
+        : '🔔 ההתראה תגיע אליו ' + whenLabel(d.toISOString()) + ' (יום ' + DAYS[d.getDay()] + '). המשימה עצמה מופיעה אצלו באפליקציה כבר עכשיו.';
+      summary.className = 'remind-sum' + (past ? ' bad' : '');
+    }
+    var quick = (dayDiff(td, ymd(nm)) === 1 ? 'מחר' : 'ביום ' + DAYS[nm.getDay()]) + ' ב-8:30';
+    var chips = optChips([['morning', quick], ['pick', '📅 יום ושעה אחרים']], mode, function (v) {
+      mode = v;
+      pick.classList.toggle('hidden', v !== 'pick');
+      upd();
+    });
+    upd();
+    return {
+      el: h('div', { class: 'field later-field' }, [h('span', { class: 'lbl', text: '🔕 מתי לשלוח לו התראה?' }), chips, pick, summary]),
+      value: function () {
+        var d = when();
+        if (!d) { toast('צריך לבחור יום להתראה'); return null; }
+        if (d.getTime() < Date.now() + 60000) { toast('הזמן שנבחר להתראה כבר עבר'); return null; }
+        return d.toISOString();
+      }
+    };
+  }
+
   /** שדה חזרה: כל יום / שבוע / חודש / חודש עברי / שנה / שנה עברית. */
   function repeatField() {
     var now = new Date(), hp = hebParts(now);
@@ -1946,9 +2026,28 @@
       var assignee = t ? t.assigneeId : S.me.id;
       if (!Array.prototype.some.call(sel.options, function (o) { return o.value === assignee; })) sel.appendChild(h('option', { value: assignee, text: uname(assignee) }));
       sel.value = assignee;
+      // "התראה אליו מאוחר יותר" (רק כשנותנים למישהו אחר): המשימה מופיעה אצלו מיד, וההתראה לטלפון בזמן שנבחר
+      var later = null; // נבנה רק בלחיצה, כדי שלא יהיו בחלון שתי בחירות שעה מוסתרות
+      var laterOn = false;
+      var laterBox = h('div', { class: 'hidden' });
+      var laterBtn = h('button', { class: 'opt later-btn', type: 'button', text: '🔕 התראה אליו מאוחר יותר' });
+      laterBtn.addEventListener('click', function () {
+        if (!later) { later = laterField(); laterBox.appendChild(later.el); }
+        laterOn = !laterOn;
+        laterBtn.classList.toggle('on', laterOn);
+        syncLater();
+      });
+      var laterRow = h('div', { class: 'extras hidden' }, laterBtn);
+      function laterAllowed() { return sel.value !== S.me.id && (!t || sel.value !== t.assigneeId) && !(repBox && !repBox.classList.contains('hidden')); }
+      function syncLater() {
+        var ok = laterAllowed();
+        laterRow.classList.toggle('hidden', !ok);
+        laterBox.classList.toggle('hidden', !ok || !laterOn);
+      }
       el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למי' }), sel,
-        t && t.assigneeId !== S.me.id ? null : h('p', { class: 'small hint-assign hidden', text: 'המשימה תגיע אליו/ה לאישור.' })]));
-      sel.addEventListener('change', function () { var hnt = el.querySelector('.hint-assign'); if (hnt) hnt.classList.toggle('hidden', sel.value === S.me.id); });
+        t && t.assigneeId !== S.me.id ? null : h('p', { class: 'small hint-assign hidden', text: 'המשימה תגיע אליו/ה לאישור.' }), laterRow]));
+      el.appendChild(laterBox);
+      sel.addEventListener('change', function () { var hnt = el.querySelector('.hint-assign'); if (hnt) hnt.classList.toggle('hidden', sel.value === S.me.id); syncLater(); });
 
       // "למתי" = היום שבו רוצים לראות את המשימה ולטפל בה. משימה לתאריך עתידי מחכה ב"משימות עתידיות".
       var td = today(), tm = addDays(td, 1);
@@ -2023,6 +2122,7 @@
           remBox.classList.toggle('hidden', on || !extras.firstChild.classList.contains('on'));
           extras.firstChild.classList.toggle('hidden', on);
           pickBtns.forEach(function (b) { b.classList.toggle('hidden', on); });
+          syncLater();
         };
         extras.children[1].addEventListener('click', syncRep);
       }
@@ -2056,16 +2156,24 @@
         }
         var remind = remBox.classList.contains('hidden') ? (t ? t.remindAt || '' : '') : rem.value();
         if (remind === null) return;
+        var nAt = '';
+        if (laterOn && laterAllowed()) { nAt = later.value(); if (nAt === null) return; }
         var due = picked === 'pick' ? (dateIn.value || '') : picked;
         var fields = { title: v, note: note.value.trim(), priority: st.priority, assigneeId: sel.value, dueDate: due, remindAt: remind };
         if (!t) {
           var nid = rid();
           var tk = Object.assign({ id: nid }, fields);
           if (st.source) tk.source = st.source;
+          if (nAt) tk.notifyAt = nAt;
           queue({ type: 'create', task: tk });
           st.files.forEach(function (a) { queueUpload(nid, a); });
           var other = fields.assigneeId !== S.me.id;
           var u = user(fields.assigneeId) || {};
+          if (other && nAt) { // לא להפריע לו עכשיו: בלי הצעת וואטסאפ
+            closeSheet();
+            toast('המשימה נשלחה ל' + u.name + ' ✓ ההתראה תגיע אליו ' + whenLabel(nAt) + (u.hasPush ? '' : '. שימו לב: אצלו ההתראות לא מופעלות.'));
+            return;
+          }
           if (other && !u.hasPush) {
             replaceSheet(waSheet(fields.assigneeId, 'שלום ' + u.name + ', נתתי לך משימה באפליקציה:\n"' + v + '"\n' + APP_URL + '#t=' + nid, 'המשימה נשלחה ל' + u.name + ' ✓'));
             return;
@@ -2077,10 +2185,11 @@
         } else {
           var ch = {};
           Object.keys(fields).forEach(function (k) { if ((t[k] || '') !== fields[k]) ch[k] = fields[k]; });
+          if (ch.assigneeId && nAt) ch.notifyAt = nAt;
           if (Object.keys(ch).length) queue({ type: 'update', id: t.id, fields: ch });
           st.files.forEach(function (a) { queueUpload(t.id, a); });
           closeSheet();
-          toast('נשמר ✓');
+          toast(ch.notifyAt ? 'נשמר ✓ ההתראה תגיע ל' + uname(ch.assigneeId) + ' ' + whenLabel(nAt) : 'נשמר ✓');
         }
       }
       setTimeout(function () { grow(title, 168); grow(note, noteMax()); }, 0);
