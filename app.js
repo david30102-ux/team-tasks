@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.5.0';
+  var APP_VERSION = '2.5.1';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -998,35 +998,57 @@
     });
     return out.filter(function (g) { return g.list.length; });
   }
-  function printDoc(u, groups, range, withNotes) {
+  /** תוכן הדף כטקסט בלבד: משמש גם להדפסה במסך וגם ל-PDF שהשרת מכין. */
+  function printData(u, groups, range, withNotes) {
     var d = new Date(), td = today(), n = 0;
     groups.forEach(function (g) { n += g.list.length; });
     var rangeTxt = { now: 'של היום ומה שפתוח', week: 'עד סוף השבוע', all: 'כל המשימות הפתוחות' }[range];
-    var doc = h('div', { class: 'pa' }, [
-      h('h1', { text: 'משימות – ' + u.name }),
-      h('div', { class: 'pa-date', text: 'יום ' + DAYS[d.getDay()] + ' · ' + hebDate(d.toISOString()) + ' · ' + shortDate(td) + '.' + d.getFullYear() }),
-      h('div', { class: 'pa-sub', text: rangeTxt + ' · ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + ' · מסמנים ✓ בריבוע כשהמשימה בוצעה' })
-    ]);
-    groups.forEach(function (g) {
-      doc.appendChild(h('h2', { text: PR_LABEL[g.p] + ' (' + g.list.length + ')' }));
+    return {
+      title: 'משימות – ' + u.name,
+      date: 'יום ' + DAYS[d.getDay()] + ' · ' + hebDate(d.toISOString()) + ' · ' + shortDate(td) + '.' + d.getFullYear(),
+      sub: rangeTxt + ' · ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + ' · מסמנים ✓ בריבוע כשהמשימה בוצעה',
+      groups: groups.map(function (g) {
+        return {
+          label: PR_LABEL[g.p] + ' (' + g.list.length + ')',
+          rows: g.list.map(function (t) {
+            var day = taskDay(t), when = '—';
+            if (day) when = day < td ? 'באיחור (' + shortDate(day) + ')' : day === td ? 'היום' : 'יום ' + DAYS[dateOf(day).getDay()] + ' ' + shortDate(day);
+            if (t.remindAt && remindDay(t) === day) when += ' ' + timeOf(t.remindAt);
+            return { t: t.title, n: withNotes ? (t.note || '') : '', w: when, f: t.createdById !== u.id ? 'מאת ' + uname(t.createdById) : '' };
+          })
+        };
+      }),
+      foot: (u.supervisorId ? 'אחראי/ת: ' + uname(u.supervisorId) + ' · ' : '') + 'הודפס מאפליקציית המשימות'
+    };
+  }
+  function printDoc(pd) {
+    var doc = h('div', { class: 'pa' }, [h('h1', { text: pd.title }), h('div', { class: 'pa-date', text: pd.date }), h('div', { class: 'pa-sub', text: pd.sub })]);
+    pd.groups.forEach(function (g) {
+      doc.appendChild(h('h2', { text: g.label }));
       var tb = h('table', {}, h('tr', {}, [h('th', { text: '✓' }), h('th', { text: 'משימה' }), h('th', { text: 'למתי' }), h('th', { text: 'הערות' })]));
-      g.list.forEach(function (t) {
-        var day = taskDay(t), when = '—';
-        if (day) when = day < td ? 'באיחור (' + shortDate(day) + ')' : day === td ? 'היום' : 'יום ' + DAYS[dateOf(day).getDay()] + ' ' + shortDate(day);
-        if (t.remindAt && remindDay(t) === day) when += ' ' + timeOf(t.remindAt);
+      g.rows.forEach(function (r) {
         tb.appendChild(h('tr', {}, [
           h('td', { class: 'bx' }, h('span', { class: 'sq' })),
-          h('td', {}, [h('div', { class: 't', text: t.title }), withNotes && t.note ? h('div', { class: 'n', text: t.note }) : null,
-            t.createdById !== u.id ? h('div', { class: 'm', text: 'מאת ' + uname(t.createdById) }) : null]),
-          h('td', { class: 'when', text: when }),
+          h('td', {}, [h('div', { class: 't', text: r.t }), r.n ? h('div', { class: 'n', text: r.n }) : null, r.f ? h('div', { class: 'm', text: r.f }) : null]),
+          h('td', { class: 'when', text: r.w }),
           h('td', { class: 'blank' })
         ]));
       });
       doc.appendChild(tb);
     });
     doc.appendChild(h('div', { class: 'foot' }, [h('div', { text: 'הערות / חוסרים:' }), h('div', { class: 'lines' }, [h('div'), h('div'), h('div')])]));
-    doc.appendChild(h('div', { class: 'pa-sub', text: (u.supervisorId ? 'אחראי/ת: ' + uname(u.supervisorId) + ' · ' : '') + 'הודפס מאפליקציית המשימות' }));
+    doc.appendChild(h('div', { class: 'pa-sub', text: pd.foot }));
     return doc;
+  }
+  /** שם הקובץ: התאריך של היום, למשל 18.11.2026.pdf */
+  function pdfName() { var d = new Date(); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() + '.pdf'; }
+  function b64ToBytes(s) { var bin = atob(s), out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  function saveFile(file) {
+    var url = URL.createObjectURL(file);
+    var a = h('a', { href: url, download: file.name, class: 'hidden' });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 2000);
   }
   function printSheet(uid) {
     return function (el) {
@@ -1038,8 +1060,46 @@
         var n = 0;
         printList(uid, prs, range).forEach(function (g) { n += g.list.length; });
         count.textContent = n ? 'יודפסו ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + '.' : 'אין משימות לפי הבחירה.';
-        go.disabled = !n; open2.disabled = !n;
+        go.disabled = !n; open2.disabled = !n; pdfBtn.disabled = !n;
+        pdfFile = null; // הבחירה השתנתה: צריך להכין PDF חדש
+        pdfReady.classList.add('hidden');
+        pdfBtn.classList.remove('hidden');
       }
+      function current() { return printData(u, printList(uid, prs, range), range, withNotes); }
+
+      // PDF מוכן לוואטסאפ. שני שלבים: (1) השרת מכין את הקובץ, (2) לחיצה פותחת את תפריט השיתוף.
+      // (תפריט השיתוף חייב להיפתח מלחיצה ישירה, ולכן לא פותחים אותו אוטומטית אחרי ההמתנה לשרת.)
+      var pdfFile = null;
+      var pdfBtn = h('button', { class: 'btn block', type: 'button', text: '📄 הכנת PDF לוואטסאפ', onclick: function () {
+        busy(pdfBtn, true, 'מכין PDF…');
+        api('printPdf', { doc: current() }, 90000).then(function (r) {
+          busy(pdfBtn, false);
+          if (!r.ok) {
+            if (r.error === 'auth') { lostLogin(); return; }
+            toast(r.error === 'network' ? 'אין חיבור לאינטרנט. אפשר בינתיים "הדפסה" רגילה.' : 'לא הצלחתי להכין PDF: ' + errText(r));
+            return;
+          }
+          pdfFile = new File([b64ToBytes(r.data)], pdfName(), { type: 'application/pdf' });
+          pdfName_.textContent = '✓ הקובץ מוכן: ';
+          pdfName_.appendChild(h('bdi', { dir: 'ltr', text: pdfFile.name })); // שם הקובץ משמאל לימין (אחרת נראה הפוך)
+          pdfBtn.classList.add('hidden');
+          pdfReady.classList.remove('hidden');
+        });
+      } });
+      var pdfName_ = h('div', { class: 'msg ok' });
+      var shareBtn = h('button', { class: 'btn block', type: 'button', text: '📤 שליחה (וואטסאפ)', onclick: function () {
+        if (!pdfFile) return;
+        var data = { files: [pdfFile], title: pdfFile.name };
+        if (navigator.canShare && navigator.share && navigator.canShare(data)) {
+          navigator.share(data).catch(function (e) { if (e && e.name !== 'AbortError') { saveFile(pdfFile); toast('הקובץ נשמר בהורדות. בוואטסאפ: 📎 ← מסמך.'); } });
+        } else {
+          saveFile(pdfFile);
+          toast('הקובץ נשמר בהורדות (' + pdfFile.name + '). בוואטסאפ: 📎 ← מסמך ← בוחרים אותו.');
+        }
+      } });
+      var dlBtn = h('button', { class: 'btn secondary', type: 'button', text: '⬇️ שמירה במכשיר', onclick: function () { if (pdfFile) { saveFile(pdfFile); toast('נשמר: ' + pdfFile.name); } } });
+      var pdfReady = h('div', { class: 'pdf-ready hidden' }, [pdfName_, shareBtn, h('div', { class: 'actions' }, dlBtn),
+        h('p', { class: 'small', text: 'בתפריט השיתוף בוחרים וואטסאפ, ואז את איש הקשר.' })]);
       el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'אילו דחיפויות' }),
         optChips([['high', '🔴 דחוף'], ['normal', '🟡 רגיל'], ['low', '⚪ לא דחוף']], prs.slice(), function (v, on) {
           prs = prs.filter(function (x) { return x !== v; });
@@ -1050,11 +1110,13 @@
         optChips([['now', 'של היום ומה שפתוח'], ['week', 'עד סוף השבוע'], ['all', 'הכל (כולל עתידיות)']], range, function (v) { range = v; upd(); })]));
       var cb = h('input', { type: 'checkbox', id: 'printNotes' });
       cb.checked = true;
-      cb.addEventListener('change', function () { withNotes = cb.checked; });
+      cb.addEventListener('change', function () { withNotes = cb.checked; upd(); });
       el.appendChild(h('label', { class: 'check-row', 'for': 'printNotes' }, [cb, h('span', { text: 'כולל ההערות של כל משימה' })]));
       el.appendChild(count);
-      var go = h('button', { class: 'btn block', type: 'button', text: '🖨️ הדפסה / שמירה כ-PDF', onclick: function () {
-        var doc = printDoc(u, printList(uid, prs, range), range, withNotes);
+      el.appendChild(pdfBtn);
+      el.appendChild(pdfReady);
+      var go = h('button', { class: 'btn secondary', type: 'button', text: '🖨️ הדפסה', onclick: function () {
+        var doc = printDoc(current());
         var area = $('printArea');
         if (!area) {
           document.head.appendChild(h('style', { id: 'printCss', text: PRINT_CSS + '#printArea{display:none}@media print{body>*:not(#printArea){display:none!important}#printArea{display:block!important}}' }));
@@ -1066,8 +1128,8 @@
         try { window.print(); } catch (e) { toast('ההדפסה לא נפתחה. נסו "פתיחה כדף נפרד".'); }
       } });
       // גיבוי: דף נפרד (למשל באייפון: שיתוף ← הדפסה / שמירה כ-PDF)
-      var open2 = h('button', { class: 'btn secondary block', type: 'button', text: '📄 פתיחה כדף נפרד', onclick: function () {
-        var doc = printDoc(u, printList(uid, prs, range), range, withNotes);
+      var open2 = h('button', { class: 'btn secondary', type: 'button', text: 'פתיחה כדף נפרד', onclick: function () {
+        var doc = printDoc(current());
         var html = '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
           '<title>משימות – ' + doc.querySelector('h1').textContent.replace(/[<>&]/g, '') + '</title><style>body{margin:12px;background:#fff}' + PRINT_CSS + '</style></head><body>' + doc.outerHTML + '</body></html>';
         var url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -1075,8 +1137,8 @@
         if (!w) location.href = url;
         setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
       } });
-      el.appendChild(h('div', { class: 'actions' }, [go, open2]));
-      el.appendChild(h('p', { class: 'small', text: 'בטלפון: במסך ההדפסה אפשר לבחור מדפסת, או "שמירה כ-PDF" ולשלוח בוואטסאפ.' }));
+      el.appendChild(h('div', { class: 'sec' }, [h('span', { text: 'או להדפיס ישר' })]));
+      el.appendChild(h('div', { class: 'actions', style: 'margin-top:4px' }, [go, open2]));
       upd();
     };
   }
