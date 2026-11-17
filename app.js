@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.4.0';
+  var APP_VERSION = '2.5.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -193,7 +193,7 @@
       if (findTask(v, op.task.id)) return;
       var as = op.task.assigneeId || me;
       v.tasks.push(Object.assign({ note: '', priority: 'normal', dueDate: '', remindAt: '', rank: null }, op.task, {
-        assigneeId: as, createdById: me, createdAt: op.at, assignedAt: op.at, updatedAt: op.at, status: as === me ? 'open' : 'pending'
+        assigneeId: as, createdById: me, createdAt: op.at, assignedAt: op.at, updatedAt: op.at, status: as === me || (user(as) || {}).noApp ? 'open' : 'pending'
       }));
       return;
     }
@@ -206,17 +206,17 @@
     if (op.type === 'order') {
       var pos = {};
       op.ids.forEach(function (id, i) { pos[id] = i + 1; });
-      v.tasks.forEach(function (t) { if (t.assigneeId === me && t.status === 'open' && pos[t.id]) t.rank = pos[t.id]; });
+      v.tasks.forEach(function (t) { if (t.assigneeId === (op.uid || me) && t.status === 'open' && pos[t.id]) t.rank = pos[t.id]; });
       return;
     }
-    if (op.type === 'autoOrder') { v.tasks.forEach(function (t) { if (t.assigneeId === me) t.rank = null; }); return; }
+    if (op.type === 'autoOrder') { v.tasks.forEach(function (t) { if (t.assigneeId === (op.uid || me)) t.rank = null; }); return; }
     var t = findTask(v, op.id);
     if (!t) return;
     switch (op.type) {
       case 'update':
         if ('assigneeId' in op.fields && op.fields.assigneeId !== t.assigneeId) {
           t.rank = null; t.assignedAt = op.at; t.reason = ''; t.respondedAt = '';
-          if (t.status !== 'done' && t.status !== 'cancelled') t.status = (op.fields.assigneeId === me || op.fields.assigneeId === t.createdById) ? 'open' : 'pending';
+          if (t.status !== 'done' && t.status !== 'cancelled') t.status = (op.fields.assigneeId === me || op.fields.assigneeId === t.createdById || (user(op.fields.assigneeId) || {}).noApp) ? 'open' : 'pending';
         }
         if ('remindAt' in op.fields && op.fields.remindAt !== t.remindAt) t.remindSent = false;
         Object.assign(t, op.fields);
@@ -285,6 +285,9 @@
     bad_rule: 'הגדרת החזרה לא תקינה.',
     self: 'אי אפשר להשבית את עצמכם או לשנות את ההרשאה של עצמכם.',
     too_big: 'הקובץ גדול מדי (עד 10MB).',
+    bad_supervisor: 'צריך לבחור אחראי/ת שיש לו/ה אפליקציה.',
+    is_supervisor: 'העובד הזה אחראי על עובד בלי אפליקציה. קודם מעבירים את האחריות למישהו אחר.',
+    no_app: 'לעובד הזה אין אפליקציה, ולכן אין לו קוד הזמנה.',
     bad_type: 'אפשר לצרף תמונות, הקלטות, PDF, Word, Excel, PowerPoint וקובצי טקסט.',
     bad_email: 'כתובת המייל לא תקינה.',
     bad_calendar: 'מזהה היומן לא תקין. הוא נראה כמו כתובת מייל.',
@@ -717,11 +720,16 @@
     var mineN = V.tasks.filter(function (t) { return t.assigneeId === me && (t.status === 'pending' || (t.status === 'open' && !isFuture(t))); }).length;
     var givenN = V.tasks.filter(function (t) { return t.createdById === me && t.assigneeId !== me && isActive(t) || (t.createdById === me && (t.status === 'rejected' || t.status === 'returned')); }).length;
     var tabs = [['mine', 'שלי', mineN], ['given', 'נתתי', givenN]];
+    myWorkers().forEach(function (u) { // לשונית לכל עובד בלי אפליקציה שאני אחראי עליו (מנהל: לכולם)
+      var n = V.tasks.filter(function (t) { return t.assigneeId === u.id && t.status === 'open' && !isFuture(t); }).length;
+      tabs.push(['w:' + u.id, '🔧 ' + firstName(u.name), n]);
+    });
     if (isMgr()) tabs.push(['team', 'צוות', 0]);
     tabs.push(['history', 'היסטוריה', 0]);
     if (!tabs.some(function (t) { return t[0] === S.tab; })) S.tab = 'mine';
     var nav = $('tabs');
     nav.textContent = '';
+    nav.classList.toggle('many', tabs.length > 4);
     tabs.forEach(function (t) {
       var on = S.tab === t[0];
       nav.appendChild(h('button', {
@@ -738,6 +746,7 @@
     el.textContent = '';
     var q = (LQ[S.tab] || '').trim();
     if (q && (S.tab !== 'team' || isMgr())) viewSearch(el, q);
+    else if (S.tab.indexOf('w:') === 0) viewWorker(el, S.tab.slice(2));
     else if (S.tab === 'given') viewGiven(el);
     else if (S.tab === 'team' && isMgr()) viewTeam(el);
     else if (S.tab === 'history') viewHistory(el, keep);
@@ -750,7 +759,7 @@
   var LQ_PH = { mine: '🔍 חיפוש במשימות שלי', given: '🔍 חיפוש במשימות שנתתי', team: '🔍 חיפוש בכל משימות הצוות' };
   function searchBar() {
     var wrap = $('searchWrap'), qi = $('listQ'), x = $('listQx');
-    var on = LQ.hasOwnProperty(S.tab) && (S.tab !== 'team' || isMgr());
+    var on = (LQ.hasOwnProperty(S.tab) || S.tab.indexOf('w:') === 0) && (S.tab !== 'team' || isMgr());
     wrap.classList.toggle('hidden', !on);
     if (!on) return;
     if (!qi.getAttribute('data-wired')) {
@@ -764,8 +773,8 @@
     }
     if (qi.getAttribute('data-tab') !== S.tab) {
       qi.setAttribute('data-tab', S.tab);
-      qi.value = LQ[S.tab];
-      qi.placeholder = LQ_PH[S.tab];
+      qi.value = LQ[S.tab] || '';
+      qi.placeholder = LQ_PH[S.tab] || '🔍 חיפוש במשימות של ' + firstName(uname(S.tab.slice(2)));
     }
     x.classList.toggle('hidden', !qi.value);
   }
@@ -783,6 +792,7 @@
     var hits = V.tasks.filter(function (t) {
       if (S.tab === 'mine' && t.assigneeId !== me) return false;
       if (S.tab === 'given' && (t.createdById !== me || t.assigneeId === me)) return false;
+      if (S.tab.indexOf('w:') === 0 && t.assigneeId !== S.tab.slice(2)) return false;
       var hay = norm(t.title + ' ' + (t.note || '') + ' ' + uname(t.assigneeId) + ' ' + uname(t.createdById));
       return words.every(function (w) { return hay.indexOf(w) >= 0; });
     });
@@ -821,8 +831,8 @@
   }
   function prOf(t) { return PR.indexOf(t.priority) >= 0 ? t.priority : 'normal'; }
   /** המשימות הפתוחות שלי: "להיום" (היום ומה שעבר), קבוצות דחיפות (בלי תאריך), ועתידיות (מחר והלאה). */
-  function myOpen() {
-    var me = S.me.id, td = today();
+  function myOpen(uid) {
+    var me = uid || S.me.id, td = today();
     var open = V.tasks.filter(function (t) { return t.assigneeId === me && t.status === 'open'; });
     var todayL = [], future = [], undated = [];
     open.forEach(function (t) {
@@ -900,6 +910,177 @@
     });
     return box;
   }
+  /** הרשימות הפתוחות של עובד (שלי, או של עובד בלי אפליקציה שאני אחראי עליו): להיום, דחיפות, בוצעו היום, עתידיות. */
+  function taskLists(el, uid, title) {
+    var mine = uid === S.me.id, o = myOpen(uid);
+    var listKey = mine ? 'mine' : 'worker';
+    el.appendChild(h('div', { class: 'sec' }, [
+      h('span', { text: title }),
+      o.manual
+        ? h('button', { class: 'link-btn', type: 'button', text: 'סדר אוטומטי', onclick: function () { queue(mine ? { type: 'autoOrder' } : { type: 'autoOrder', uid: uid }); toast('הרשימה חזרה לסדר אוטומטי'); } })
+        : (o.list.length > 1 ? h('span', { class: 'hint', text: 'גוררים ≡ כדי לשנות סדר' }) : null)
+    ]));
+    if (o.today.length) {
+      el.appendChild(h('div', { class: 'grp-h grp-today', text: '⏰ להיום (' + o.today.length + ')' }));
+      var tul = h('ul', { class: 'list grp', 'data-list': listKey, 'data-group': 'today' });
+      o.today.forEach(function (t) { tul.appendChild(card(t, 'today', false)); });
+      el.appendChild(tul);
+    }
+    if (!o.list.length && !o.today.length) {
+      el.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'big', text: '🎉' }),
+        o.future.length ? 'אין משימות להיום.' : 'אין משימות פתוחות.', h('br'), 'לחצו על + כדי להוסיף משימה.']));
+    } else {
+      PR.forEach(function (p) {
+        var g = o.groups[p];
+        if (!g.length) return;
+        el.appendChild(h('div', { class: 'grp-h grp-' + p, text: PR_LABEL[p] + ' (' + g.length + ')' }));
+        var ul = h('ul', { class: 'list grp', 'data-list': listKey, 'data-group': p, 'data-uid': mine ? null : uid });
+        g.forEach(function (t) { ul.appendChild(card(t, 'mine', g.length > 1)); });
+        el.appendChild(ul);
+      });
+    }
+    doneSection(el, 'בוצעו היום (#) 👏', doneOn(today(), uid), 'mine', 'done');
+    if (o.future.length) {
+      var fKey = mine ? 'showFuture' : 'showFuture.' + uid;
+      var showF = !!sget(fKey, false);
+      el.appendChild(h('button', { class: 'future-btn', type: 'button', 'aria-expanded': showF ? 'true' : 'false', onclick: function () { sset(fKey, !showF); render(); } },
+        [h('span', { text: '📅 משימות עתידיות (' + o.future.length + ')' }), h('span', { class: 'chev', text: showF ? '▴' : '▾' })]));
+      if (showF) {
+        var ful = h('ul', { class: 'list', 'data-list': 'future' });
+        o.future.forEach(function (t) { ful.appendChild(card(t, 'future', false)); });
+        el.appendChild(ful);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- עובד בלי אפליקציה (למשל תחזוקה)
+  function firstName(n) { return String(n || '').split(' ')[0]; }
+  /** האם אני מנהל את המשימות של העובד הזה (הוא בלי אפליקציה, ואני האחראי עליו או מנהל). */
+  function manages(uid) { var u = user(uid); return !!u && !!u.noApp && (isMgr() || u.supervisorId === S.me.id); }
+  function canDone(t) { return t.assigneeId === S.me.id || manages(t.assigneeId); }
+  function myWorkers() { return V.users.filter(function (u) { return u.active && u.noApp && (isMgr() || u.supervisorId === S.me.id); }).sort(byName); }
+  function viewWorker(el, uid) {
+    var u = user(uid);
+    if (!u) { el.appendChild(h('div', { class: 'empty', text: 'העובד לא נמצא.' })); return; }
+    var sup = u.supervisorId ? (u.supervisorId === S.me.id ? 'אני' : uname(u.supervisorId)) : 'עוד לא נקבע';
+    el.appendChild(h('div', { class: 'worker-head' }, [
+      h('div', { class: 'wh-title', text: '🔧 המשימות של ' + u.name }),
+      h('div', { class: 'small', text: '📵 בלי אפליקציה · אחראי/ת: ' + sup }),
+      h('div', { class: 'actions' }, [
+        h('button', { class: 'btn', type: 'button', text: '+ משימה ל' + firstName(u.name), onclick: function () { openSheet(editSheet(null, { assigneeId: uid })); } }),
+        h('button', { class: 'btn secondary', type: 'button', text: '🖨️ הדפסה', onclick: function () { openSheet(printSheet(uid)); } })
+      ])
+    ]));
+    taskLists(el, uid, 'המשימות הפתוחות');
+  }
+
+  // ---------------------------------------------------------------- הדפסה (דף משימות לעובד בלי אפליקציה)
+  var PRINT_CSS = '.pa{font-family:Arial,"Segoe UI",sans-serif;color:#000;background:#fff;direction:rtl;font-size:13pt;line-height:1.35}' +
+    '.pa h1{font-size:20pt;margin:0 0 4px}.pa .pa-date{font-size:12pt}.pa .pa-sub{font-size:11pt;color:#444;margin:2px 0 10px}' +
+    '.pa h2{font-size:14pt;margin:16px 0 6px;border-bottom:2px solid #000;padding-bottom:2px}' +
+    '.pa table{width:100%;border-collapse:collapse}.pa tr{page-break-inside:avoid;break-inside:avoid}' +
+    '.pa th,.pa td{border:1px solid #555;padding:6px 8px;vertical-align:top;text-align:right}' +
+    '.pa th{background:#eee;font-size:11pt}.pa td.bx{width:34px;text-align:center}' +
+    '.pa .sq{display:inline-block;width:18px;height:18px;border:2px solid #000;margin-top:2px}' +
+    '.pa td.when{width:86px;font-size:11pt}.pa td.blank{width:27%}' +
+    '.pa .t{font-weight:700}.pa .n{font-size:11pt;margin-top:3px;white-space:pre-wrap}.pa .m{font-size:10pt;color:#555;margin-top:2px}' +
+    '.pa .foot{margin-top:18px;font-size:11pt}.pa .lines div{border-bottom:1px solid #777;height:30px}' +
+    '@page{size:A4;margin:14mm}';
+  function endOfWeek(td) { return addDays(td, 6 - dateOf(td).getDay()); } // עד שבת
+  /** המשימות להדפסה, בסדר של המסך: לפי דחיפות; בתוך כל דחיפות – של היום, אחר כך לפי הסדר שנקבע, ואז עתידיות. */
+  function printList(uid, prs, range) {
+    var o = myOpen(uid), td = today(), wk = endOfWeek(td), out = [];
+    PR.forEach(function (p) {
+      if (prs.indexOf(p) < 0) return;
+      var inP = function (t) { return prOf(t) === p; };
+      var fut = o.future.filter(inP).filter(function (t) { return range === 'all' || (range === 'week' && taskDay(t) <= wk); });
+      out.push({ p: p, list: o.today.filter(inP).concat(o.groups[p], fut) });
+    });
+    return out.filter(function (g) { return g.list.length; });
+  }
+  function printDoc(u, groups, range, withNotes) {
+    var d = new Date(), td = today(), n = 0;
+    groups.forEach(function (g) { n += g.list.length; });
+    var rangeTxt = { now: 'של היום ומה שפתוח', week: 'עד סוף השבוע', all: 'כל המשימות הפתוחות' }[range];
+    var doc = h('div', { class: 'pa' }, [
+      h('h1', { text: 'משימות – ' + u.name }),
+      h('div', { class: 'pa-date', text: 'יום ' + DAYS[d.getDay()] + ' · ' + hebDate(d.toISOString()) + ' · ' + shortDate(td) + '.' + d.getFullYear() }),
+      h('div', { class: 'pa-sub', text: rangeTxt + ' · ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + ' · מסמנים ✓ בריבוע כשהמשימה בוצעה' })
+    ]);
+    groups.forEach(function (g) {
+      doc.appendChild(h('h2', { text: PR_LABEL[g.p] + ' (' + g.list.length + ')' }));
+      var tb = h('table', {}, h('tr', {}, [h('th', { text: '✓' }), h('th', { text: 'משימה' }), h('th', { text: 'למתי' }), h('th', { text: 'הערות' })]));
+      g.list.forEach(function (t) {
+        var day = taskDay(t), when = '—';
+        if (day) when = day < td ? 'באיחור (' + shortDate(day) + ')' : day === td ? 'היום' : 'יום ' + DAYS[dateOf(day).getDay()] + ' ' + shortDate(day);
+        if (t.remindAt && remindDay(t) === day) when += ' ' + timeOf(t.remindAt);
+        tb.appendChild(h('tr', {}, [
+          h('td', { class: 'bx' }, h('span', { class: 'sq' })),
+          h('td', {}, [h('div', { class: 't', text: t.title }), withNotes && t.note ? h('div', { class: 'n', text: t.note }) : null,
+            t.createdById !== u.id ? h('div', { class: 'm', text: 'מאת ' + uname(t.createdById) }) : null]),
+          h('td', { class: 'when', text: when }),
+          h('td', { class: 'blank' })
+        ]));
+      });
+      doc.appendChild(tb);
+    });
+    doc.appendChild(h('div', { class: 'foot' }, [h('div', { text: 'הערות / חוסרים:' }), h('div', { class: 'lines' }, [h('div'), h('div'), h('div')])]));
+    doc.appendChild(h('div', { class: 'pa-sub', text: (u.supervisorId ? 'אחראי/ת: ' + uname(u.supervisorId) + ' · ' : '') + 'הודפס מאפליקציית המשימות' }));
+    return doc;
+  }
+  function printSheet(uid) {
+    return function (el) {
+      var u = user(uid) || { id: uid, name: '' };
+      sheetHead(el, '🖨️ הדפסת משימות – ' + u.name);
+      var prs = PR.slice(), range = 'now', withNotes = true;
+      var count = h('p', { class: 'small print-count' });
+      function upd() {
+        var n = 0;
+        printList(uid, prs, range).forEach(function (g) { n += g.list.length; });
+        count.textContent = n ? 'יודפסו ' + (n === 1 ? 'משימה אחת' : n + ' משימות') + '.' : 'אין משימות לפי הבחירה.';
+        go.disabled = !n; open2.disabled = !n;
+      }
+      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'אילו דחיפויות' }),
+        optChips([['high', '🔴 דחוף'], ['normal', '🟡 רגיל'], ['low', '⚪ לא דחוף']], prs.slice(), function (v, on) {
+          prs = prs.filter(function (x) { return x !== v; });
+          if (on) prs.push(v);
+          upd();
+        }, true)]));
+      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'אילו משימות' }),
+        optChips([['now', 'של היום ומה שפתוח'], ['week', 'עד סוף השבוע'], ['all', 'הכל (כולל עתידיות)']], range, function (v) { range = v; upd(); })]));
+      var cb = h('input', { type: 'checkbox', id: 'printNotes' });
+      cb.checked = true;
+      cb.addEventListener('change', function () { withNotes = cb.checked; });
+      el.appendChild(h('label', { class: 'check-row', 'for': 'printNotes' }, [cb, h('span', { text: 'כולל ההערות של כל משימה' })]));
+      el.appendChild(count);
+      var go = h('button', { class: 'btn block', type: 'button', text: '🖨️ הדפסה / שמירה כ-PDF', onclick: function () {
+        var doc = printDoc(u, printList(uid, prs, range), range, withNotes);
+        var area = $('printArea');
+        if (!area) {
+          document.head.appendChild(h('style', { id: 'printCss', text: PRINT_CSS + '#printArea{display:none}@media print{body>*:not(#printArea){display:none!important}#printArea{display:block!important}}' }));
+          area = h('div', { id: 'printArea' });
+          document.body.appendChild(area);
+        }
+        area.textContent = '';
+        area.appendChild(doc);
+        try { window.print(); } catch (e) { toast('ההדפסה לא נפתחה. נסו "פתיחה כדף נפרד".'); }
+      } });
+      // גיבוי: דף נפרד (למשל באייפון: שיתוף ← הדפסה / שמירה כ-PDF)
+      var open2 = h('button', { class: 'btn secondary block', type: 'button', text: '📄 פתיחה כדף נפרד', onclick: function () {
+        var doc = printDoc(u, printList(uid, prs, range), range, withNotes);
+        var html = '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+          '<title>משימות – ' + doc.querySelector('h1').textContent.replace(/[<>&]/g, '') + '</title><style>body{margin:12px;background:#fff}' + PRINT_CSS + '</style></head><body>' + doc.outerHTML + '</body></html>';
+        var url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        var w = window.open(url, '_blank');
+        if (!w) location.href = url;
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      } });
+      el.appendChild(h('div', { class: 'actions' }, [go, open2]));
+      el.appendChild(h('p', { class: 'small', text: 'בטלפון: במסך ההדפסה אפשר לבחור מדפסת, או "שמירה כ-PDF" ולשלוח בוואטסאפ.' }));
+      upd();
+    };
+  }
+
   function viewMine(el) {
     var me = S.me.id;
     el.appendChild(todayCard());
@@ -915,43 +1096,7 @@
       el.appendChild(pl);
     }
 
-    var o = myOpen();
-    el.appendChild(h('div', { class: 'sec' }, [
-      h('span', { text: 'המשימות שלי' }),
-      o.manual
-        ? h('button', { class: 'link-btn', type: 'button', text: 'סדר אוטומטי', onclick: function () { queue({ type: 'autoOrder' }); toast('הרשימה חזרה לסדר אוטומטי'); } })
-        : (o.list.length > 1 ? h('span', { class: 'hint', text: 'גוררים ≡ כדי לשנות סדר' }) : null)
-    ]));
-    if (o.today.length) {
-      el.appendChild(h('div', { class: 'grp-h grp-today', text: '⏰ להיום (' + o.today.length + ')' }));
-      var tul = h('ul', { class: 'list grp', 'data-list': 'mine', 'data-group': 'today' });
-      o.today.forEach(function (t) { tul.appendChild(card(t, 'today', false)); });
-      el.appendChild(tul);
-    }
-    if (!o.list.length && !o.today.length) {
-      el.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'big', text: '🎉' }),
-        o.future.length ? 'אין משימות להיום.' : 'אין משימות פתוחות.', h('br'), 'לחצו על + כדי להוסיף משימה.']));
-    } else {
-      PR.forEach(function (p) {
-        var g = o.groups[p];
-        if (!g.length) return;
-        el.appendChild(h('div', { class: 'grp-h grp-' + p, text: PR_LABEL[p] + ' (' + g.length + ')' }));
-        var ul = h('ul', { class: 'list grp', 'data-list': 'mine', 'data-group': p });
-        g.forEach(function (t) { ul.appendChild(card(t, 'mine', g.length > 1)); });
-        el.appendChild(ul);
-      });
-    }
-    doneSection(el, 'בוצעו היום (#) 👏', doneOn(today(), me), 'mine', 'done');
-    if (o.future.length) {
-      var showF = !!sget('showFuture', false);
-      el.appendChild(h('button', { class: 'future-btn', type: 'button', 'aria-expanded': showF ? 'true' : 'false', onclick: function () { sset('showFuture', !showF); render(); } },
-        [h('span', { text: '📅 משימות עתידיות (' + o.future.length + ')' }), h('span', { class: 'chev', text: showF ? '▴' : '▾' })]));
-      if (showF) {
-        var ful = h('ul', { class: 'list', 'data-list': 'future' });
-        o.future.forEach(function (t) { ful.appendChild(card(t, 'future', false)); });
-        el.appendChild(ful);
-      }
-    }
+    taskLists(el, me, 'המשימות שלי');
     var ser = V.series.filter(function (s) { return s.assigneeId === me || s.createdById === me; });
     if (ser.length) {
       el.appendChild(h('div', { class: 'center', style: 'margin-top:14px' },
@@ -1002,6 +1147,7 @@
   }
   function userStatus(u) {
     if (!u.active) return 'לא פעיל';
+    if (u.noApp) return '';
     if (u.locked) return '🔒 הכניסה נעולה – צריך קוד הזמנה חדש';
     if (!u.hasPin) return u.invitePending ? 'הוזמן, עוד לא נכנס' : 'עוד לא נכנס – צריך קוד הזמנה חדש';
     return '';
@@ -1029,7 +1175,7 @@
         h('span', { class: 'avatar', text: (u.name || '?').charAt(0) }),
         h('span', { class: 'grow' }, [
           h('span', { class: 'pname' }, [u.name, u.role === 'manager' ? h('span', { class: 'role', text: 'מנהל' }) : null,
-            u.active && !u.hasPush ? h('span', { class: 'role muted-role', text: 'בלי התראות' }) : null]),
+            u.noApp ? h('span', { class: 'role muted-role', text: '📵 בלי אפליקציה' }) : (u.active && !u.hasPush ? h('span', { class: 'role muted-role', text: 'בלי התראות' }) : null)]),
           u.active ? h('span', { class: 'stats', text: parts.join(' · ') }) : null,
           st ? h('span', { class: 'pstatus', text: st }) : null
         ]),
@@ -1109,7 +1255,7 @@
     var me = S.me.id;
     var li = h('li', { class: 'task p-' + prOf(t) + ' is-' + t.status, 'data-id': t.id });
     // רק מי שהמשימה שלו מסמן "בוצע" (או מבטל)
-    var canCheck = (t.status === 'open' || t.status === 'done') && mode !== 'history' && mode !== 'pending' && t.assigneeId === me;
+    var canCheck = (t.status === 'open' || t.status === 'done') && mode !== 'history' && mode !== 'pending' && canDone(t);
     var check = h('button', {
       class: 'check', type: 'button', 'aria-label': t.status === 'done' ? 'החזרה לפתוחות' : 'סימון כבוצע'
     }, h('span', { class: 'ring', text: t.status === 'done' ? '✓' : '' }));
@@ -1191,7 +1337,7 @@
   function toggleDone(id) {
     var t = task(id);
     if (!t) return;
-    if (t.assigneeId !== S.me.id) { toast('רק ' + uname(t.assigneeId) + ' יכול/ה לסמן שהמשימה בוצעה.'); return; }
+    if (!canDone(t)) { toast('רק ' + uname(t.assigneeId) + ' יכול/ה לסמן שהמשימה בוצעה.'); return; }
     if (t.status === 'open' || t.status === 'pending') {
       queue({ type: 'done', id: id });
       toast(CHEERS[Math.floor(Math.random() * CHEERS.length)], 'ביטול', function () { queue({ type: 'reopen', id: id }); });
@@ -1336,9 +1482,10 @@
         var g = items.map(function (x) { return x.getAttribute('data-id'); });
         g.splice(from, 1);
         g.splice(to, 0, li.getAttribute('data-id'));
-        var o = myOpen(), grp = list.getAttribute('data-group'), ids = [];
+        var wuid = list.getAttribute('data-uid') || ''; // רשימה של עובד בלי אפליקציה
+        var o = myOpen(wuid || undefined), grp = list.getAttribute('data-group'), ids = [];
         PR.forEach(function (p) { ids = ids.concat(p === grp ? g : o.groups[p].map(function (x) { return x.id; })); });
-        queue({ type: 'order', ids: ids });
+        queue(wuid ? { type: 'order', ids: ids, uid: wuid } : { type: 'order', ids: ids });
       } else if (S.renderLater) { S.renderLater = false; render(); }
     }
     hd.addEventListener('pointermove', move);
@@ -1474,7 +1621,7 @@
       markSeen(id);
       var me = S.me.id, mgr = isMgr();
       var isCreator = t.createdById === me, isAssignee = t.assigneeId === me;
-      var canEdit = mgr || isCreator;
+      var canEdit = mgr || isCreator || manages(t.assigneeId);
       sheetHead(el, t.title);
 
       var status;
@@ -1515,7 +1662,7 @@
         btn('ok', '✓ מקבל/ת את המשימה', function () { acceptTask(id); });
         btn('secondary', '✗ לא יכול/ה לקבל', function () { openSheet(reasonSheet(id, 'reject')); });
       } else if (t.status === 'open') {
-        if (isAssignee) btn('ok', '✓ בוצע', function () { closeSheet(); toggleDone(id); });
+        if (canDone(t)) btn('ok', '✓ בוצע', function () { closeSheet(); toggleDone(id); });
         if (isAssignee && !taskDay(t) && myOpen().list.length > 1 && myOpen().groups[prOf(t)][0] && myOpen().groups[prOf(t)][0].id !== id) {
           btn('secondary', '⬆ לראש הרשימה', function () { moveToTop(id); closeSheet(); toast('הועברה לראש הקבוצה'); });
         }
@@ -2158,9 +2305,10 @@
       V.users.filter(function (u) { return u.active && u.id !== S.me.id; }).sort(byName).forEach(function (u) {
         sel.appendChild(h('option', { value: u.id, text: u.name }));
       });
-      var assignee = t ? t.assigneeId : S.me.id;
+      var assignee = t ? t.assigneeId : (preset.assigneeId && user(preset.assigneeId) ? preset.assigneeId : S.me.id);
       if (!Array.prototype.some.call(sel.options, function (o) { return o.value === assignee; })) sel.appendChild(h('option', { value: assignee, text: uname(assignee) }));
       sel.value = assignee;
+      Array.prototype.forEach.call(sel.options, function (o) { if ((user(o.value) || {}).noApp) o.textContent = '🔧 ' + o.textContent; });
       // "התראה אליו מאוחר יותר" (רק כשנותנים למישהו אחר): המשימה מופיעה אצלו מיד, וההתראה לטלפון בזמן שנבחר
       var later = null; // נבנה רק בלחיצה, כדי שלא יהיו בחלון שתי בחירות שעה מוסתרות
       var laterOn = false;
@@ -2173,16 +2321,26 @@
         syncLater();
       });
       var laterRow = h('div', { class: 'extras hidden' }, laterBtn);
-      function laterAllowed() { return sel.value !== S.me.id && (!t || sel.value !== t.assigneeId) && !(repBox && !repBox.classList.contains('hidden')); }
+      function laterAllowed() { return sel.value !== S.me.id && (!t || sel.value !== t.assigneeId) && !(repBox && !repBox.classList.contains('hidden')) && !(user(sel.value) || {}).noApp; }
       function syncLater() {
         var ok = laterAllowed();
         laterRow.classList.toggle('hidden', !ok);
         laterBox.classList.toggle('hidden', !ok || !laterOn);
       }
-      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למי' }), sel,
-        t && t.assigneeId !== S.me.id ? null : h('p', { class: 'small hint-assign hidden', text: 'המשימה תגיע אליו/ה לאישור.' }), laterRow]));
+      var hint = h('p', { class: 'small hint-assign hidden' });
+      function syncHint() { // מה יקרה כשהמשימה תישלח
+        var u = user(sel.value) || {};
+        var show = sel.value !== S.me.id && (!t || sel.value !== t.assigneeId);
+        hint.textContent = u.noApp
+          ? '🔧 ל' + u.name + ' אין אפליקציה: המשימה תיכנס ישר לרשימה שלו' + (u.supervisorId && u.supervisorId !== S.me.id ? ', ו' + uname(u.supervisorId) + ' (האחראי/ת) יקבל/תקבל התראה.' : '.')
+          : 'המשימה תגיע אליו/ה לאישור.';
+        hint.classList.toggle('hidden', !show);
+      }
+      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למי' }), sel, hint, laterRow]));
       el.appendChild(laterBox);
-      sel.addEventListener('change', function () { var hnt = el.querySelector('.hint-assign'); if (hnt) hnt.classList.toggle('hidden', sel.value === S.me.id); syncLater(); });
+      syncHint();
+      syncLater();
+      sel.addEventListener('change', function () { syncHint(); syncLater(); });
 
       // "למתי" = היום שבו רוצים לראות את המשימה ולטפל בה. משימה לתאריך עתידי מחכה ב"משימות עתידיות".
       var td = today(), tm = addDays(td, 1);
@@ -2304,6 +2462,11 @@
           st.files.forEach(function (a) { queueUpload(nid, a); });
           var other = fields.assigneeId !== S.me.id;
           var u = user(fields.assigneeId) || {};
+          if (other && u.noApp) { // עובד בלי אפליקציה: נכנסת ישר לרשימה שלו
+            closeSheet();
+            toast('המשימה נוספה לרשימה של ' + u.name + ' ✓');
+            return;
+          }
           if (other && nAt) { // לא להפריע לו עכשיו: בלי הצעת וואטסאפ
             closeSheet();
             toast('המשימה נשלחה ל' + u.name + ' ✓ ההתראה תגיע אליו ' + whenLabel(nAt) + (u.hasPush ? '' : '. שימו לב: אצלו ההתראות לא מופעלות.'));
@@ -2366,16 +2529,25 @@
       var self = u.id === S.me.id;
       sheetHead(el, u.name + (self ? ' (אני)' : ''));
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'טלפון: ' }), h('span', { class: 'ltr', text: prettyPhone(u.phone) || 'לא נשמר' })]));
-      el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
-      el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
+      if (u.noApp) {
+        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '📵 ' }), 'בלי אפליקציה – המשימות שלו מודפסות']));
+        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי/ת: ' }), u.supervisorId ? uname(u.supervisorId) : 'עוד לא נקבע']));
+      } else {
+        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
+        el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
+      }
       var st = userStatus(u);
       if (st) el.appendChild(h('div', { class: 'msg bad', text: st }));
 
       var acts = h('div', { class: 'actions' });
-      if (u.active) {
+      if (u.active && u.noApp) {
+        acts.appendChild(h('button', { class: 'btn', type: 'button', text: '🔧 המסך של ' + firstName(u.name), onclick: function () {
+          closeAll(); S.tab = 'w:' + u.id; sset('tab', S.tab); render(); window.scrollTo(0, 0);
+        } }));
+      } else if (u.active) {
         acts.appendChild(h('button', { class: 'btn', type: 'button', text: 'קוד הזמנה חדש', onclick: function (e) { newInvite(u.id, e.currentTarget); } }));
-        acts.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '✎ עריכת פרטים', onclick: function () { openSheet(editUserSheet(u.id)); } }));
       }
+      if (u.active) acts.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '✎ עריכת פרטים', onclick: function () { openSheet(editUserSheet(u.id)); } }));
       if (!self) {
         acts.appendChild(h('button', {
           class: 'btn ' + (u.active ? 'danger' : 'secondary'), type: 'button', text: u.active ? 'השבתת העובד' : 'הפעלה מחדש',
@@ -2383,7 +2555,7 @@
         }));
       }
       el.appendChild(acts);
-      el.appendChild(h('p', { class: 'small', text: '"קוד הזמנה חדש" משמש לכניסה ראשונה, לטלפון חדש, או כשהכניסה ננעלה.' }));
+      if (!u.noApp) el.appendChild(h('p', { class: 'small', text: '"קוד הזמנה חדש" משמש לכניסה ראשונה, לטלפון חדש, או כשהכניסה ננעלה.' }));
 
       var c = counts(u.id);
       var openAll = V.tasks.filter(function (t) { return t.assigneeId === u.id && isActive(t); });
@@ -2504,10 +2676,37 @@
     var phone = h('input', { type: 'tel', class: 'ltr', inputmode: 'tel', placeholder: '050-1234567', autocomplete: 'off', value: u ? prettyPhone(u.phone) : '' });
     var msg = h('div', { class: 'msg bad hidden' });
     el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'שם' }), name]));
-    el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'טלפון נייד' }), phone]));
+    var phoneLbl = h('span', { class: 'lbl', text: 'טלפון נייד' });
+    el.appendChild(h('div', { class: 'field' }, [phoneLbl, phone]));
+    // עובד בלי טלפון/מחשב (למשל תחזוקה): לא נכנס לאפליקציה, ואחראי מנהל ומדפיס לו את המשימות
+    var noApp = !!(u && u.noApp);
+    var supSel = h('select', { 'aria-label': 'אחראי' });
+    var noAppBox = h('div', { class: 'field' });
+    var roleBox = null;
     if (!self) {
-      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'תפקיד' }),
-        optChips([['employee', 'עובד'], ['manager', 'מנהל (רואה הכל)']], role, function (v) { role = v; })]));
+      V.users.filter(function (x) { return x.active && !x.noApp && (!u || x.id !== u.id); }).sort(byName).forEach(function (x) {
+        supSel.appendChild(h('option', { value: x.id, text: x.id === S.me.id ? 'אני' : x.name }));
+      });
+      supSel.value = u && u.supervisorId ? u.supervisorId : S.me.id;
+      var supBox = h('div', { class: 'sup-box' + (noApp ? '' : ' hidden') }, [
+        h('span', { class: 'lbl', style: 'margin-top:10px', text: 'מי אחראי/ת עליו (מסדר/ת לו משימות ומדפיס/ה)' }), supSel,
+        h('p', { class: 'small', text: 'לאחראי/ת ולמנהל תופיע לשונית "🔧" עם המשימות שלו וכפתור הדפסה. כל אחד יכול לתת לו משימה, והאחראי/ת מקבל/ת התראה.' })
+      ]);
+      var cb = h('input', { type: 'checkbox', id: 'noAppCb' });
+      cb.checked = noApp;
+      cb.addEventListener('change', function () {
+        noApp = cb.checked;
+        supBox.classList.toggle('hidden', !noApp);
+        if (roleBox) roleBox.classList.toggle('hidden', noApp);
+        phoneLbl.textContent = noApp ? 'טלפון (לא חובה)' : 'טלפון נייד';
+      });
+      noAppBox.appendChild(h('label', { class: 'check-row', 'for': 'noAppCb' }, [cb, h('span', { text: '📵 אין לו טלפון/מחשב – משימות מודפסות' })]));
+      noAppBox.appendChild(supBox);
+      roleBox = h('div', { class: 'field' + (noApp ? ' hidden' : '') }, [h('span', { class: 'lbl', text: 'תפקיד' }),
+        optChips([['employee', 'עובד'], ['manager', 'מנהל (רואה הכל)']], role, function (v) { role = v; })]);
+      el.appendChild(roleBox);
+      el.appendChild(noAppBox);
+      if (noApp) phoneLbl.textContent = 'טלפון (לא חובה)';
     }
     el.appendChild(msg);
     var btn = h('button', { class: 'btn block', type: 'button', text: btnText });
@@ -2515,8 +2714,12 @@
       msg.classList.add('hidden');
       if (!name.value.trim()) { msg.textContent = ERR.no_name; msg.classList.remove('hidden'); return; }
       var req = { name: name.value };
-      if (phone.value.trim() || !u) req.phone = phone.value;
-      if (!self) req.role = role;
+      if (phone.value.trim() || !u || (noApp && u && u.phone)) req.phone = phone.value;
+      if (!self) {
+        req.role = noApp ? 'employee' : role;
+        req.noApp = noApp;
+        if (noApp) req.supervisorId = supSel.value;
+      }
       busy(btn, true, 'שומר…');
       onSave(req).then(function (r) {
         busy(btn, false);
@@ -2536,11 +2739,15 @@
       sheetHead(el, 'הוספת עובד');
       var f = userForm(el, null, 'employee', function (req) {
         return api('addUser', req).then(function (r) {
-          if (r.ok) { takeSnapshot(r); replaceSheet(inviteSheet(r.userId, r.inviteCode)); }
+          if (r.ok) {
+            takeSnapshot(r);
+            if (!r.inviteCode) { closeSheet(); toast('נוסף ✓ הלשונית "🔧 ' + firstName(uname(r.userId)) + '" מוכנה למעלה.'); render(); }
+            else replaceSheet(inviteSheet(r.userId, r.inviteCode));
+          }
           return r;
         });
       }, 'הוספה וקבלת קוד הזמנה');
-      el.appendChild(h('p', { class: 'small', text: 'אחרי ההוספה יופיע קוד הזמנה, עם כפתור לשליחה לעובד בוואטסאפ.' }));
+      el.appendChild(h('p', { class: 'small', text: 'אחרי ההוספה יופיע קוד הזמנה, עם כפתור לשליחה לעובד בוואטסאפ. (לעובד בלי טלפון/מחשב אין קוד.)' }));
       return f;
     };
   }
@@ -2942,7 +3149,7 @@
     if (S.outbox.length && sget('outboxOwner', null) !== (S.me && S.me.id)) { S.outbox = []; sset('outbox', []); }
     if (S.token && !S.seen) { S.seen = { base: new Date().toISOString(), t: {} }; sset('seen', S.seen); }
     derive();
-    $('fab').addEventListener('click', function () { openSheet(editSheet(null)); });
+    $('fab').addEventListener('click', function () { openSheet(editSheet(null, S.tab.indexOf('w:') === 0 ? { assigneeId: S.tab.slice(2) } : null)); });
     $('btnSettings').addEventListener('click', function () { openSheet(settingsSheet()); });
     $('syncState').addEventListener('click', function () {
       if (S.outbox.length) { flush(); toast('מנסים לשמור שוב. השינויים שמורים בטלפון ולא יאבדו.'); }
