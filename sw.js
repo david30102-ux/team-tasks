@@ -1,12 +1,44 @@
 // Service worker: שומר את קבצי האפליקציה בטלפון (נפתחת מהר גם בלי רשת), מציג התראות שמגיעות מ-Firebase
 // כשהאפליקציה סגורה, ומקבל "שיתוף" מוואטסאפ באנדרואיד.
 // בכל עדכון של האפליקציה מעלים את VERSION (חייב להיות זהה ל-APP_VERSION ב-app.js).
-var VERSION = '2.5.2';
+var VERSION = '2.5.3';
 var CACHE = 'tt-' + VERSION;
 var SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 importScripts('config.js');
 var CFG = self.APP_CONFIG || {};
+
+/**
+ * לחיצה על התראה – גם של Firebase וגם כאלה שהאפליקציה הציגה בעצמה.
+ * נרשם לפני Firebase, כדי שהטיפול שלנו ירוץ ראשון: Firebase רק מעלה את האפליקציה לקדמת המסך,
+ * בלי לפתוח את המשימה. כאן: אם האפליקציה פתוחה – אומרים לה לפתוח את המשימה (עם תוכן ההתראה);
+ * אם היא סגורה – פותחים אותה ישר על המשימה.
+ */
+self.addEventListener('notificationclick', function (e) {
+  var n = e.notification || {}, d = n.data || {}, info = null;
+  if (d.ttLink !== undefined) {
+    info = { taskId: d.ttTask || '', kind: d.ttKind || '', title: n.title || '', body: n.body || '' };
+  } else if (d.FCM_MSG) {
+    var m = d.FCM_MSG || {}, md = m.data || {}, mn = m.notification || {};
+    info = { taskId: md.taskId || '', kind: md.kind || '', title: md.title || mn.title || n.title || '', body: md.body || mn.body || n.body || '' };
+  }
+  if (!info) return;
+  if (e.stopImmediatePropagation) e.stopImmediatePropagation(); // ש-Firebase לא יטפל בה שוב
+  if (n.close) n.close();
+  var scope = self.registration.scope;
+  var link = scope + (info.taskId ? '#t=' + info.taskId + (info.kind ? '&k=' + encodeURIComponent(info.kind) : '') +
+    '&m=' + encodeURIComponent((info.title + (info.body ? ' – ' + info.body : '')).slice(0, 300)) : '');
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c.url.indexOf(scope) === 0 && 'focus' in c) {
+        c.postMessage({ openTask: info.taskId, note: info });
+        return c.focus();
+      }
+    }
+    return self.clients.openWindow(link);
+  }));
+});
 if (CFG.firebase && CFG.firebase.apiKey) {
   try {
     importScripts(
@@ -32,23 +64,6 @@ self.addEventListener('activate', function (e) {
 });
 
 self.addEventListener('message', function (e) { if (e.data === 'skipWaiting') self.skipWaiting(); });
-
-/** לחיצה על התראה שהאפליקציה הציגה בעצמה (כשהייתה פתוחה). התראות של Firebase מטופלות על ידי Firebase. */
-self.addEventListener('notificationclick', function (e) {
-  var d = (e.notification && e.notification.data) || {};
-  if (!d.ttLink) return;
-  e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
-    for (var i = 0; i < list.length; i++) {
-      var c = list[i];
-      if (c.url.indexOf(self.registration.scope) === 0 && 'focus' in c) {
-        if (d.ttTask) c.postMessage({ openTask: d.ttTask });
-        return c.focus();
-      }
-    }
-    return self.clients.openWindow(d.ttLink);
-  }));
-});
 
 /** שיתוף מאפליקציה אחרת (אנדרואיד): שומרים את הטקסט והקבצים, ופותחים את האפליקציה עם משימה חדשה. */
 function saveShare(data) {

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.5.2';
+  var APP_VERSION = '2.5.3';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -587,7 +587,7 @@
           var title = d.title || n.title || 'עדכון', body = d.body || n.body || '';
           tick();
           showLocalNotification(title, body, d);
-          toast(title + (body ? ': ' + body : ''), d.taskId ? 'פתיחה' : null, d.taskId ? function () { openTask(d.taskId); } : null);
+          toast(title + (body ? ': ' + body : ''), d.taskId ? 'פתיחה' : null, d.taskId ? function () { openTask(d.taskId, { title: title, body: body, kind: d.kind || '' }); } : null);
         });
       }
       return navigator.serviceWorker.ready;
@@ -611,7 +611,7 @@
       return reg.showNotification(title, {
         body: body, icon: 'icon-192.png', badge: 'icon-192.png', lang: 'he', dir: 'rtl',
         tag: d.taskId || d.kind || 'tt', renotify: true, requireInteraction: d.kind === 'remind', vibrate: [300, 120, 300],
-        data: { ttTask: d.taskId || '', ttLink: APP_URL + (d.taskId ? '#t=' + d.taskId : '') }
+        data: { ttTask: d.taskId || '', ttKind: d.kind || '', ttLink: APP_URL + (d.taskId ? '#t=' + d.taskId : '') }
       });
     }).catch(function () { /* לא חשוב */ });
   }
@@ -1405,13 +1405,15 @@
     return li;
   }
 
-  function openTask(id) {
+  /** note: מה שהתעדכן (מהתראה שנלחצה) – מוצג בראש המשימה. */
+  function openTask(id, note) {
     markSeen(id);
     if (!task(id) && !(H.res || []).some(function (t) { return t.id === id; })) {
-      sync(true).then(function () { openSheet(taskSheet(id)); });
+      sync(true).then(function () { openSheet(taskSheet(id, note)); });
       return;
     }
-    openSheet(taskSheet(id));
+    if (note) sync(true); // שהתגובה/העדכון החדשים יופיעו מיד
+    openSheet(taskSheet(id, note));
   }
 
   var CHEERS = ['כל הכבוד! ✓', 'יישר כח! 👏', 'מצוין, בוצע ✓', 'עוד אחת מאחוריך 💪', 'בוצע. תודה! ✓'];
@@ -1690,12 +1692,13 @@
     return '';
   }
 
-  function taskSheet(id) {
-    var fn = taskSheetBuilder(id);
+  function taskSheet(id, note) {
+    var fn = taskSheetBuilder(id, note);
     fn.taskId = id;
     return fn;
   }
-  function taskSheetBuilder(id) {
+  function taskSheetBuilder(id, note) {
+    var scrolled = false;
     return live(function (el) {
       var t = task(id) || (H.res || []).filter(function (x) { return x.id === id; })[0];
       if (!t) { sheetHead(el, 'המשימה לא נמצאה'); el.appendChild(h('p', { text: 'ייתכן שהיא נמחקה.' })); return; }
@@ -1704,6 +1707,12 @@
       var isCreator = t.createdById === me, isAssignee = t.assigneeId === me;
       var canEdit = mgr || isCreator || manages(t.assigneeId);
       sheetHead(el, t.title);
+      // נפתח מהתראה: מה בדיוק התעדכן
+      if (note && note.title) el.appendChild(h('div', { class: 'notif-note', text: '🔔 ' + note.title + (note.body ? ' – ' + note.body : '') }));
+      if (note && note.kind === 'comment' && !scrolled) { // תגובה / הקפצה / קובץ: גוללים ישר לתגובות
+        scrolled = true;
+        setTimeout(function () { var c = el.querySelector('.comments'); if (c) try { c.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (x) { /* לא חשוב */ } }, 250);
+      }
 
       var status;
       if (t.status === 'done') {
@@ -3192,10 +3201,11 @@
 
   // ================================================================ קישור ישיר למשימה, שיתוף מוואטסאפ, גרירת קבצים
   function checkHash() {
-    var m = /^#t=([a-z0-9]{8,40})$/i.exec(location.hash || '');
+    var m = /^#t=([a-z0-9]{8,40})(?:&k=([^&]*))?(?:&m=(.*))?$/i.exec(location.hash || '');
     if (!m || !S.token) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* לא חשוב */ }
-    openTask(m[1]);
+    var dec = function (x) { try { return decodeURIComponent(x || ''); } catch (e) { return ''; } };
+    openTask(m[1], m[3] ? { title: dec(m[3]), body: '', kind: dec(m[2]) } : null);
   }
   function checkShare() {
     if (!/[?&]share=1/.test(location.search) || !S.token) return;
@@ -3270,7 +3280,12 @@
     window.addEventListener('online', function () { tick(); processUploads(); });
     window.addEventListener('hashchange', checkHash);
     if ('serviceWorker' in navigator) { // לחיצה על התראה כשהאפליקציה כבר פתוחה: פותחים את המשימה בלי לטעון מחדש
-      navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.openTask && S.token) openTask(e.data.openTask); });
+      navigator.serviceWorker.addEventListener('message', function (e) {
+        var m = e.data || {};
+        if (!S.token || !(m.openTask || m.note)) return;
+        if (m.openTask) openTask(m.openTask, m.note); // ישר למשימה, עם מה שהתעדכן
+        else if (m.note && m.note.title) toast(m.note.title + (m.note.body ? ': ' + m.note.body : ''));
+      });
     }
     setInterval(function () { if (!document.hidden) tick(); }, 60000);
     render();
