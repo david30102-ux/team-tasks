@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.5.4';
+  var APP_VERSION = '2.6.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -1358,6 +1358,7 @@
     if (t.priority === 'high' && active && mode !== 'mine') meta.appendChild(chip('דחוף', 'urgent'));
     if (t.dueDate && active && !(mode === 'today' && t.dueDate === td)) { var d = dueLabel(t.dueDate); meta.appendChild(chip(d.text, d.cls)); }
     if (mode !== 'today' && t.remindAt && !t.remindSent && active && t.remindAt > nowIso) meta.appendChild(chip('⏰ ' + (remindDay(t) === t.dueDate ? timeOf(t.remindAt) : whenLabel(t.remindAt)), 'remind'));
+    if (t.personal) meta.appendChild(chip('🔒 אישי', 'pers'));
     if (t.seriesId) meta.appendChild(chip('🔁', ''));
     if ((mode === 'mine' || mode === 'pending' || mode === 'today' || mode === 'future' || mode === 'search') && t.createdById !== me) meta.appendChild(chip('מאת ' + uname(t.createdById), ''));
     if (mode === 'given' || ((mode === 'history' || mode === 'search') && t.assigneeId !== me)) meta.appendChild(chip('אצל ' + uname(t.assigneeId), ''));
@@ -1734,6 +1735,7 @@
       if (t.status === 'rejected' || t.status === 'returned') {
         el.appendChild(h('div', { class: 'msg bad', text: (t.status === 'rejected' ? '✗ ' + uname(t.assigneeId) + ' לא יכול/ה לקבל: ' : '↩ ' + uname(t.assigneeId) + ' החזיר/ה: ') + t.reason }));
       }
+      if (t.personal) el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: '🔒 ' }), 'משימה אישית – רק את/ה רואה אותה']));
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי: ' }), isAssignee ? 'אני' : uname(t.assigneeId)]));
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'נוצרה: ' }),
         fullDate(t.createdAt) + ' (' + hebDate(t.createdAt) + ')' + (isCreator ? '' : ' · ע״י ' + uname(t.createdById))]));
@@ -2404,6 +2406,39 @@
       if (!Array.prototype.some.call(sel.options, function (o) { return o.value === assignee; })) sel.appendChild(h('option', { value: assignee, text: uname(assignee) }));
       sel.value = assignee;
       Array.prototype.forEach.call(sel.options, function (o) { if ((user(o.value) || {}).noApp) o.textContent = '🔧 ' + o.textContent; });
+      var MULTI = '__multi';
+      var multiBox = null, multiIds = [];
+      if (!t && isMgr()) { // שליחה לכמה עובדים: כל אחד מקבל עותק משלו
+        sel.appendChild(h('option', { value: MULTI, text: '👥 לכולם / לכמה עובדים…' }));
+        var others = V.users.filter(function (u) { return u.active && u.id !== S.me.id; }).sort(byName);
+        multiIds = others.map(function (u) { return u.id; });
+        var boxes = others.map(function (u) {
+          var cb = h('input', { type: 'checkbox', id: 'mu-' + u.id, 'data-uid': u.id });
+          cb.checked = true;
+          cb.addEventListener('change', function () { multiIds = boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.getAttribute('data-uid'); }); syncHint(); });
+          return cb;
+        });
+        var setAll = function (on) { boxes.forEach(function (b) { b.checked = on; }); multiIds = on ? others.map(function (u) { return u.id; }) : []; syncHint(); };
+        multiBox = h('div', { class: 'multi-box hidden' }, [
+          h('div', { class: 'multi-acts' }, [h('button', { class: 'link-btn', type: 'button', text: 'סימון כולם', onclick: function () { setAll(true); } }),
+            h('button', { class: 'link-btn', type: 'button', text: 'ניקוי', onclick: function () { setAll(false); } })]),
+          h('div', { class: 'multi-list' }, others.map(function (u, i) { return h('label', { class: 'check-row', 'for': 'mu-' + u.id }, [boxes[i], h('span', { text: (u.noApp ? '🔧 ' : '') + u.name })]); }))
+        ]);
+      }
+      var isMulti = function () { return sel.value === MULTI; };
+      // 🔒 משימה אישית: רק כשאני רושם לעצמי. אף אחד אחר לא רואה אותה באפליקציה, גם לא מנהל.
+      var canPersonal = function () { return sel.value === S.me.id && (!t || (t.assigneeId === S.me.id && t.createdById === S.me.id)); };
+      st.personal = !!(t && t.personal);
+      var persBtn = h('button', { class: 'opt pers-btn' + (st.personal ? ' on' : ''), type: 'button', text: '🔒 אישי' });
+      var persHint = h('p', { class: 'small pers-hint' + (st.personal ? '' : ' hidden'), text: 'משימה אישית: רק את/ה רואה אותה. היא לא מופיעה לאף אחד אחר באפליקציה, גם לא למנהל.' });
+      persBtn.addEventListener('click', function () {
+        st.personal = !st.personal;
+        persBtn.classList.toggle('on', st.personal);
+        persHint.classList.toggle('hidden', !st.personal);
+        sel.disabled = st.personal; // משימה אישית נשארת אצלי
+      });
+      var persRow = h('div', { class: 'extras' + (canPersonal() ? '' : ' hidden') }, persBtn);
+      sel.disabled = st.personal;
       // "התראה אליו מאוחר יותר" (רק כשנותנים למישהו אחר): המשימה מופיעה אצלו מיד, וההתראה לטלפון בזמן שנבחר
       var later = null; // נבנה רק בלחיצה, כדי שלא יהיו בחלון שתי בחירות שעה מוסתרות
       var laterOn = false;
@@ -2416,7 +2451,7 @@
         syncLater();
       });
       var laterRow = h('div', { class: 'extras hidden' }, laterBtn);
-      function laterTo() { var u = user(sel.value) || {}; return u.noApp ? 'ל' + uname(u.supervisorId) + ' (האחראי/ת)' : 'אליו'; }
+      function laterTo() { if (isMulti()) return 'אליהם'; var u = user(sel.value) || {}; return u.noApp ? 'ל' + uname(u.supervisorId) + ' (האחראי/ת)' : 'אליו'; }
       function laterAllowed() {
         var u = user(sel.value) || {};
         if (u.noApp && (!u.supervisorId || u.supervisorId === S.me.id)) return false; // האחראי עצמו נותן: ממילא אין התראה
@@ -2431,16 +2466,24 @@
       function syncHint() { // מה יקרה כשהמשימה תישלח
         var u = user(sel.value) || {};
         var show = sel.value !== S.me.id && (!t || sel.value !== t.assigneeId);
+        if (multiBox) multiBox.classList.toggle('hidden', !isMulti());
+        persRow.classList.toggle('hidden', !canPersonal());
+        persHint.classList.toggle('hidden', !canPersonal() || !st.personal);
+        if (isMulti()) {
+          hint.textContent = '👥 ' + (multiIds.length === 1 ? 'עובד אחד יקבל' : multiIds.length + ' עובדים יקבלו') + ' כל אחד עותק משלו של המשימה, ויאשר ויסמן "בוצע" בנפרד.';
+          hint.classList.remove('hidden');
+          return;
+        }
         hint.textContent = u.noApp
           ? '🔧 ל' + u.name + ' אין אפליקציה: המשימה תיכנס ישר לרשימה שלו' + (u.supervisorId && u.supervisorId !== S.me.id ? ', ו' + uname(u.supervisorId) + ' (האחראי/ת) יקבל/תקבל התראה.' : '.')
           : 'המשימה תגיע אליו/ה לאישור.';
         hint.classList.toggle('hidden', !show);
       }
-      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למי' }), sel, hint, laterRow]));
+      el.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: 'למי' }), sel, multiBox, hint, persRow, persHint, laterRow]));
       el.appendChild(laterBox);
       function syncLaterBtn() { // לעובד בלי אפליקציה ההתראה הולכת לאחראי עליו
         var u = user(sel.value) || {};
-        laterBtn.textContent = u.noApp ? '🔕 התראה ל' + firstName(uname(u.supervisorId)) + ' מאוחר יותר' : '🔕 התראה אליו מאוחר יותר';
+        laterBtn.textContent = isMulti() ? '🔕 התראה אליהם מאוחר יותר' : u.noApp ? '🔕 התראה ל' + firstName(uname(u.supervisorId)) + ' מאוחר יותר' : '🔕 התראה אליו מאוחר יותר';
       }
       syncHint();
       syncLaterBtn();
@@ -2551,8 +2594,13 @@
         var v = title.value.trim();
         if (!v) { title.classList.add('err'); title.focus(); toast('צריך לכתוב מה צריך לעשות'); return; }
         var isRep = rep && !repBox.classList.contains('hidden') && rep.rule();
+        var targets = isMulti() ? multiIds.slice() : [sel.value];
+        if (!targets.length) { toast('צריך לבחור לפחות עובד אחד'); return; }
+        var personal = st.personal && canPersonal();
         if (isRep) {
-          queue({ type: 'createSeries', series: { id: rid(), title: v, note: note.value.trim(), priority: st.priority, assigneeId: sel.value, rule: rep.rule(), remindTime: repTime.value() } });
+          targets.forEach(function (uid) {
+            queue({ type: 'createSeries', series: { id: rid(), title: v, note: note.value.trim(), priority: st.priority, assigneeId: uid, rule: rep.rule(), remindTime: repTime.value(), personal: personal } });
+          });
           closeSheet();
           toast('🔁 משימה חוזרת נשמרה: ' + ruleText(rep.rule()));
           return;
@@ -2563,11 +2611,24 @@
         if (laterOn && laterAllowed()) { nAt = later.value(); if (nAt === null) return; }
         var due = picked === 'pick' ? (dateIn.value || '') : picked;
         var fields = { title: v, note: note.value.trim(), priority: st.priority, assigneeId: sel.value, dueDate: due, remindAt: remind };
+        if (!t && isMulti()) { // עותק נפרד לכל עובד שנבחר
+          targets.forEach(function (uid) {
+            var mid = rid();
+            var mk = Object.assign({ id: mid }, fields, { assigneeId: uid });
+            if (nAt) mk.notifyAt = nAt;
+            queue({ type: 'create', task: mk });
+            st.files.forEach(function (a) { queueUpload(mid, Object.assign({}, a, { fid: rid() })); });
+          });
+          closeSheet();
+          toast('המשימה נשלחה ל' + (targets.length === 1 ? uname(targets[0]) : '-' + targets.length + ' עובדים') + ' ✓' + (nAt ? ' ההתראה תגיע ' + whenLabel(nAt) : ''));
+          return;
+        }
         if (!t) {
           var nid = rid();
           var tk = Object.assign({ id: nid }, fields);
           if (st.source) tk.source = st.source;
           if (nAt) tk.notifyAt = nAt;
+          if (personal) tk.personal = true;
           queue({ type: 'create', task: tk });
           st.files.forEach(function (a) { queueUpload(nid, a); });
           var other = fields.assigneeId !== S.me.id;
@@ -2588,12 +2649,14 @@
           }
           closeSheet();
           var fut = isFuture({ dueDate: due, remindAt: remind });
+          if (personal && !fut) { toast('🔒 משימה אישית נוספה ✓ רק את/ה רואה אותה.'); return; }
           toast(other ? 'המשימה נשלחה ל' + uname(fields.assigneeId) + ' לאישור ✓'
             : fut ? 'המשימה נוספה ✓ היא מחכה ב"משימות עתידיות" עד ' + dueLabel(taskDay({ dueDate: due, remindAt: remind })).text.replace(/^ל-?/, '') : 'המשימה נוספה ✓');
         } else {
           var ch = {};
           Object.keys(fields).forEach(function (k) { if ((t[k] || '') !== fields[k]) ch[k] = fields[k]; });
           if (ch.assigneeId && nAt) ch.notifyAt = nAt;
+          if (canPersonal() && !!t.personal !== st.personal) ch.personal = st.personal;
           if (Object.keys(ch).length) queue({ type: 'update', id: t.id, fields: ch });
           st.files.forEach(function (a) { queueUpload(t.id, a); });
           closeSheet();
