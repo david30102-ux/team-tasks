@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.7.0';
+  var APP_VERSION = '2.8.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -3095,6 +3095,236 @@
     };
   }
 
+
+  // ================================================================ ייבוא מהיומן (קובץ ICS, או ה-ZIP ש-Google מורידה)
+  // הקובץ נקרא רק במכשיר. לשרת נשלחים רק האירועים שנבחרו, כמשימות רגילות של המשתמש.
+  var CAL_DAYS = 30; // חודש קדימה (החלטת דוד)
+  function icsUnesc(v) { return String(v || '').replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1').trim(); }
+  /** תאריך מ-ICS: 20261125T100000Z (UTC), 20261125T100000 עם TZID (שעון המכשיר), או 20261125 (יום שלם). */
+  function icsDate(v, params) {
+    v = String(v || '').trim();
+    var y = +v.slice(0, 4), mo = +v.slice(4, 6) - 1, d = +v.slice(6, 8);
+    if (/VALUE=DATE(?!-)/.test(params || '') || /^\d{8}$/.test(v)) return { ms: new Date(y, mo, d).getTime(), allDay: true };
+    var hh = +v.slice(9, 11), mi = +v.slice(11, 13), ss = +v.slice(13, 15) || 0;
+    if (/Z$/.test(v)) return { ms: Date.UTC(y, mo, d, hh, mi, ss), allDay: false };
+    return { ms: new Date(y, mo, d, hh, mi, ss).getTime(), allDay: false };
+  }
+  function parseIcs(text) {
+    var lines = String(text || '').replace(/\r?\n[ \t]/g, '').split(/\r?\n/);
+    var cal = '', evs = [], cur = null;
+    lines.forEach(function (ln) {
+      if (ln === 'BEGIN:VEVENT') { cur = { ex: [] }; return; }
+      if (ln === 'END:VEVENT') { if (cur && cur.start) evs.push(cur); cur = null; return; }
+      var m = /^([A-Z-]+)((?:;[^:]*)?):(.*)$/.exec(ln);
+      if (!m) return;
+      var key = m[1], params = m[2], val = m[3];
+      if (!cur) { if (key === 'X-WR-CALNAME') cal = icsUnesc(val); return; }
+      if (key === 'SUMMARY') cur.title = icsUnesc(val);
+      else if (key === 'DESCRIPTION') cur.desc = icsUnesc(val);
+      else if (key === 'LOCATION') cur.loc = icsUnesc(val);
+      else if (key === 'UID') cur.uid = val;
+      else if (key === 'STATUS') cur.status = val.toUpperCase();
+      else if (key === 'DTSTART') cur.start = icsDate(val, params);
+      else if (key === 'DTEND') cur.end = icsDate(val, params);
+      else if (key === 'RRULE') cur.rrule = val;
+      else if (key === 'EXDATE') val.split(',').forEach(function (x) { cur.ex.push(icsDate(x, params).ms); });
+      else if (key === 'RECURRENCE-ID') cur.recurId = icsDate(val, params).ms;
+    });
+    evs.forEach(function (e) { e.cal = cal; });
+    return evs;
+  }
+  var ICS_DAY = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+  /** כל ההופעות של אירוע בטווח [from, to): גם אירוע חוזר (יומי, שבועי, חודשי, שנתי). */
+  function icsOccurrences(ev, from, to) {
+    var s = ev.start.ms;
+    if (!ev.rrule) return s >= from && s < to ? [s] : [];
+    var r = {};
+    ev.rrule.split(';').forEach(function (p) { var kv = p.split('='); r[kv[0].toUpperCase()] = kv[1] || ''; });
+    var iv = Math.max(1, +r.INTERVAL || 1), count = r.COUNT ? +r.COUNT : Infinity;
+    var until = r.UNTIL ? icsDate(r.UNTIL, '').ms + (r.UNTIL.length === 8 ? 864e5 - 1 : 0) : Infinity;
+    var st = new Date(s), out = [], n = 0, guard = 0;
+    var at = function (y, mo, d) { return new Date(y, mo, d, st.getHours(), st.getMinutes(), st.getSeconds()).getTime(); }; // יום שעובר את סוף החודש ממשיך לחודש הבא
+    var atM = function (y, mo, d) { var x = new Date(y, mo, d, st.getHours(), st.getMinutes(), st.getSeconds()); return x.getMonth() === ((mo % 12) + 12) % 12 ? x.getTime() : null; }; // חודשי: 31 בחודש קצר = אין
+    function take(t) { // מחזיר false כשצריך לעצור
+      if (t === null || t < s) return true;
+      if (t > until || n >= count || t >= to) return false;
+      n++;
+      if (t >= from && ev.ex.indexOf(t) < 0) out.push(t);
+      return true;
+    }
+    var byday = r.BYDAY ? r.BYDAY.split(',') : null;
+    if (r.FREQ === 'DAILY') {
+      for (var k = 0; guard++ < 20000; k += iv) if (!take(at(st.getFullYear(), st.getMonth(), st.getDate() + k))) break;
+    } else if (r.FREQ === 'WEEKLY') {
+      var days = (byday || [Object.keys(ICS_DAY)[st.getDay()]]).map(function (x) { return ICS_DAY[x.slice(-2)]; }).sort();
+      var w0 = st.getDate() - st.getDay();
+      weeks: for (var w = 0; guard++ < 5000; w += iv) {
+        for (var i = 0; i < days.length; i++) if (!take(at(st.getFullYear(), st.getMonth(), w0 + w * 7 + days[i]))) break weeks;
+      }
+    } else if (r.FREQ === 'MONTHLY' || r.FREQ === 'YEARLY') {
+      var yearly = r.FREQ === 'YEARLY';
+      for (var mth = 0; guard++ < 2000; mth += yearly ? 12 * iv : iv) {
+        var y = st.getFullYear(), mo = st.getMonth() + mth, t;
+        if (byday && /^-?\d/.test(byday[0])) { // למשל 2MO (יום שני השני), -1FR (שישי האחרון)
+          var nth = parseInt(byday[0], 10), wd = ICS_DAY[byday[0].slice(-2)];
+          if (nth > 0) { var f = new Date(y, mo, 1).getDay(); t = atM(y, mo, 1 + ((wd - f + 7) % 7) + (nth - 1) * 7); }
+          else { var last = new Date(y, mo + 1, 0); t = atM(y, mo, last.getDate() - ((last.getDay() - wd + 7) % 7) + (nth + 1) * 7); }
+        } else t = atM(y, mo, r.BYMONTHDAY ? +r.BYMONTHDAY : st.getDate());
+        if (t === null) continue; // 31 בחודש קצר: מדלגים (כמו ביומן)
+        if (!take(t)) break;
+      }
+    } else if (s >= from && s < to) out.push(s); // חזרה מסוג שלא מכירים: רק הפעם הראשונה
+    return out;
+  }
+  /** מזהה קבוע לכל הופעה (כך שייבוא חוזר לא יוצר כפילויות). */
+  function calId(key) {
+    var h = function (str, seed) {
+      var h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+      for (var i = 0; i < str.length; i++) { var c = str.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+      h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+      h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+      return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+    };
+    return ('cal' + h(key, 1) + h(key, 7)).slice(0, 40);
+  }
+  /** כל האירועים מהקבצים, בחודש הקרוב, מוכנים לבחירה. */
+  function calItems(texts) {
+    var from = dateOf(today()).getTime(), to = from + CAL_DAYS * 864e5, evs = [];
+    texts.forEach(function (tx) { evs = evs.concat(parseIcs(tx)); });
+    var moved = {}; // הופעות של אירוע חוזר שהוזזו/בוטלו (RECURRENCE-ID)
+    evs.forEach(function (e) { if (e.recurId) moved[e.uid + '|' + e.recurId] = 1; });
+    var items = [];
+    evs.forEach(function (e) {
+      if (e.status === 'CANCELLED') return;
+      var dur = e.end ? e.end.ms - e.start.ms : 0;
+      (e.recurId ? (e.start.ms >= from && e.start.ms < to ? [e.start.ms] : []) : icsOccurrences(e, from, to)).forEach(function (ms) {
+        if (!e.recurId && moved[e.uid + '|' + ms]) return;
+        items.push({ id: calId((e.uid || e.title) + '|' + (e.recurId || ms)), title: (e.title || '(בלי שם)').slice(0, 200), ms: ms, allDay: e.start.allDay,
+          end: dur > 0 ? ms + dur : 0, loc: e.loc || '', desc: e.desc || '', cal: e.cal || '' });
+      });
+    });
+    return items.sort(function (a, b) { return a.ms - b.ms; });
+  }
+  /** קורא ZIP (כמו ש-Google מורידה) ומחזיר את טקסטי קובצי ה-ICS שבתוכו. */
+  function unzipIcs(buf) {
+    var dv = new DataView(buf), eocd = -1;
+    for (var i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) return Promise.reject(new Error('bad_zip'));
+    var cnt = dv.getUint16(eocd + 10, true), off = dv.getUint32(eocd + 16, true), jobs = [];
+    var dec = function (u8) { return new TextDecoder('utf-8').decode(u8); };
+    for (var k = 0; k < cnt && dv.getUint32(off, true) === 0x02014b50; k++) {
+      var method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
+      var nlen = dv.getUint16(off + 28, true), xlen = dv.getUint16(off + 30, true), clen = dv.getUint16(off + 32, true);
+      var lho = dv.getUint32(off + 42, true), name = dec(new Uint8Array(buf, off + 46, nlen));
+      off += 46 + nlen + xlen + clen;
+      if (!/\.ics$/i.test(name)) continue;
+      var data = new Uint8Array(buf, lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true), csize);
+      if (method === 0) jobs.push(Promise.resolve(dec(data)));
+      else if (method === 8 && window.DecompressionStream) jobs.push(new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text());
+      else jobs.push(Promise.reject(new Error('no_inflate')));
+    }
+    return Promise.all(jobs);
+  }
+  function readCalFile(f) {
+    return f.arrayBuffer().then(function (buf) {
+      var head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+      if (head[0] === 0x50 && head[1] === 0x4b) return unzipIcs(buf); // PK = ZIP
+      return [new TextDecoder('utf-8').decode(buf)];
+    });
+  }
+  function calWhen(it) {
+    var d = new Date(it.ms), w = 'יום ' + DAYS[d.getDay()] + ' ' + shortDate(ymd(d));
+    if (it.allDay) return w + ' · כל היום';
+    // טווח השעות בבידוד משמאל לימין (אחרת בעברית הוא נראה הפוך: 08:45–08:00)
+    return w + ' · ⁦' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + (it.end ? '–' + pad(new Date(it.end).getHours()) + ':' + pad(new Date(it.end).getMinutes()) : '') + '⁩';
+  }
+  function calImportSheet() {
+    return function (el) {
+      sheetHead(el, '📅 ייבוא מהיומן');
+      var body = h('div');
+      el.appendChild(h('div', { class: 'box cal-help' }, [
+        h('h3', { text: 'איך מורידים את הקובץ מיומן Google (במחשב)' }),
+        h('ol', {}, [
+          h('li', { text: 'נכנסים ל-calendar.google.com, לוחצים ⚙ ואז "הגדרות".' }),
+          h('li', { text: 'בצד ימין: "ייבוא וייצוא" ← "ייצוא". יורד קובץ ZIP.' }),
+          h('li', { text: 'כאן לוחצים "בחירת קובץ" ובוחרים אותו (את ה-ZIP כמו שהוא).' })
+        ]),
+        h('p', { class: 'small', text: 'הקובץ נקרא רק במכשיר הזה. לשרת עוברים רק האירועים שתסמנו, כמשימות שלכם.' })
+      ]));
+      var inp = h('input', { type: 'file', accept: '.ics,.zip,text/calendar,application/zip', class: 'hidden', 'aria-label': 'קובץ יומן' });
+      var pick = h('button', { class: 'btn block', type: 'button', text: '📂 בחירת קובץ', onclick: function () { inp.click(); } });
+      el.appendChild(inp);
+      el.appendChild(h('div', { class: 'actions' }, pick));
+      el.appendChild(body);
+      inp.addEventListener('change', function () {
+        var f = inp.files && inp.files[0];
+        inp.value = '';
+        if (!f) return;
+        busy(pick, true, 'קורא את הקובץ…');
+        readCalFile(f).then(function (texts) {
+          busy(pick, false);
+          show(calItems(texts));
+        }).catch(function (e) {
+          busy(pick, false);
+          toast(e && e.message === 'no_inflate' ? 'הדפדפן הזה לא יודע לפתוח ZIP. פתחו את ה-ZIP במחשב והעלו את קובץ ה-ics שבתוכו.' : 'לא הצלחתי לקרוא את הקובץ. צריך קובץ ics או ZIP מיומן Google.');
+        });
+      });
+      function show(items) {
+        body.textContent = '';
+        var have = {};
+        V.tasks.forEach(function (t) { have[t.id] = 1; });
+        if (!items.length) { body.appendChild(h('div', { class: 'empty', text: 'לא נמצאו אירועים בחודש הקרוב.' })); return; }
+        var fresh = items.filter(function (it) { return !have[it.id]; });
+        var remind = 'm15', personal = false;
+        body.appendChild(h('div', { class: 'msg ok cal-found', text: 'נמצאו ' + items.length + ' אירועים בחודש הקרוב' + (items.length > fresh.length ? ' (' + (items.length - fresh.length) + ' כבר הועתקו)' : '') + '.' }));
+        body.appendChild(h('div', { class: 'field' }, [h('span', { class: 'lbl', text: '⏰ תזכורת' }),
+          optChips([['', 'בלי'], ['m0', 'בשעת האירוע'], ['m15', 'רבע שעה לפני']], remind, function (v) { remind = v; })]));
+        var pcb = h('input', { type: 'checkbox', id: 'calPersonal' });
+        pcb.addEventListener('change', function () { personal = pcb.checked; });
+        body.appendChild(h('label', { class: 'check-row', 'for': 'calPersonal' }, [pcb, h('span', { text: '🔒 לסמן את כולן כמשימות אישיות' })]));
+        var boxes = [];
+        var go = h('button', { class: 'btn block', type: 'button' });
+        var upd = function () { var n = boxes.filter(function (b) { return b.checked; }).length; go.textContent = n ? 'העתקת ' + (n === 1 ? 'משימה אחת' : n + ' משימות') : 'לא נבחרו אירועים'; go.disabled = !n; };
+        body.appendChild(h('div', { class: 'multi-acts' }, [
+          h('button', { class: 'link-btn', type: 'button', text: 'סימון הכל', onclick: function () { boxes.forEach(function (b) { b.checked = true; }); upd(); } }),
+          h('button', { class: 'link-btn', type: 'button', text: 'ניקוי', onclick: function () { boxes.forEach(function (b) { b.checked = false; }); upd(); } })]));
+        var list = h('div', { class: 'cal-list' });
+        var lastDay = '';
+        items.forEach(function (it) {
+          var day = ymd(new Date(it.ms));
+          if (day !== lastDay) { lastDay = day; list.appendChild(h('div', { class: 'cal-day', text: 'יום ' + DAYS[new Date(it.ms).getDay()] + ' ' + shortDate(day) })); }
+          var done = !!have[it.id];
+          var cb = h('input', { type: 'checkbox', id: 'cal-' + it.id });
+          cb.checked = !done; cb.disabled = done;
+          cb.addEventListener('change', upd);
+          if (!done) { cb.item = it; boxes.push(cb); }
+          list.appendChild(h('label', { class: 'check-row cal-row' + (done ? ' done' : ''), 'for': 'cal-' + it.id }, [cb, h('span', { class: 'grow' }, [
+            h('span', { class: 'cal-t', text: it.title }),
+            h('span', { class: 'small cal-w', text: calWhen(it).replace(/^יום \S+ \S+ · /, '') + (it.cal ? ' · ' + it.cal : '') + (done ? ' · ✓ כבר הועתק' : '') })
+          ])]));
+        });
+        body.appendChild(list);
+        go.addEventListener('click', function () {
+          var sel = boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.item; });
+          if (!sel.length) return;
+          var now = Date.now();
+          sel.forEach(function (it) {
+            var note = [calWhen(it), it.loc ? '📍 ' + it.loc : '', it.desc].filter(function (x) { return x; }).join('\n').slice(0, 2000);
+            var rAt = '';
+            if (!it.allDay && remind) { var r = it.ms - (remind === 'm15' ? 15 * 60000 : 0); if (r > now + 60000) rAt = new Date(r).toISOString(); }
+            var tk = { id: it.id, title: it.title, note: note, priority: 'normal', assigneeId: S.me.id, dueDate: ymd(new Date(it.ms)), remindAt: rAt };
+            if (personal) tk.personal = true;
+            queue({ type: 'create', task: tk });
+          });
+          closeSheet();
+          toast('📅 הועתקו ' + (sel.length === 1 ? 'משימה אחת' : sel.length + ' משימות') + ' ✓ כל אחת תופיע ב"להיום" ביום שלה (עד אז – ב"משימות עתידיות").');
+        });
+        body.appendChild(h('div', { class: 'actions' }, go));
+        upd();
+      }
+    };
+  }
+
   function settingsSheet() {
     return function (el) {
       sheetHead(el, 'הגדרות');
@@ -3107,6 +3337,7 @@
       el.appendChild(pushBox());
       var links = h('div', { class: 'actions' });
       links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '🔁 משימות חוזרות', onclick: function () { openSheet(seriesListSheet()); } }));
+      links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '📅 ייבוא מהיומן', onclick: function () { openSheet(calImportSheet()); } }));
       if (isMgr() && SHOW_QUOTES) links.appendChild(h('button', { class: 'btn secondary', type: 'button', text: '💬 משפטי השראה', onclick: function () { openSheet(quotesSheet()); } }));
       el.appendChild(links);
       el.appendChild(h('div', { class: 'box' }, [
@@ -3415,7 +3646,7 @@
       checkHash();
       checkShare();
     }
-    window.TT = { S: S, V: V, flush: flush, sync: sync, version: APP_VERSION, parsePasted: parsePasted, acceptLate: acceptLate, makeAttachment: makeAttachment, queueUpload: queueUpload, ruleText: ruleText, hebParts: hebParts, openTask: openTask, render: render };
+    window.TT = { S: S, V: V, flush: flush, sync: sync, version: APP_VERSION, parsePasted: parsePasted, acceptLate: acceptLate, makeAttachment: makeAttachment, queueUpload: queueUpload, ruleText: ruleText, hebParts: hebParts, openTask: openTask, render: render, cal: { parseIcs: parseIcs, items: calItems, unzip: unzipIcs, id: calId } };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
