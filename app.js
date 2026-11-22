@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '2.6.0';
+  var APP_VERSION = '2.7.0';
   var API_LEVEL = 2;
   var CFG = self.APP_CONFIG || {};
   var SERVER = CFG.serverUrl || '';
@@ -724,6 +724,10 @@
       var n = V.tasks.filter(function (t) { return t.assigneeId === u.id && t.status === 'open' && !isFuture(t); }).length;
       tabs.push(['w:' + u.id, '🔧 ' + firstName(u.name), n]);
     });
+    myTeam().forEach(function (u) { // לשונית לכל עובד שאני האחראי/ת הישיר/ה שלו (צפייה)
+      var n = V.tasks.filter(function (t) { return t.assigneeId === u.id && (t.status === 'pending' || (t.status === 'open' && !isFuture(t))); }).length;
+      tabs.push(['w:' + u.id, '👤 ' + firstName(u.name), n]);
+    });
     if (isMgr()) tabs.push(['team', 'צוות', 0]);
     tabs.push(['history', 'היסטוריה', 0]);
     if (!tabs.some(function (t) { return t[0] === S.tab; })) S.tab = 'mine';
@@ -911,12 +915,12 @@
     return box;
   }
   /** הרשימות הפתוחות של עובד (שלי, או של עובד בלי אפליקציה שאני אחראי עליו): להיום, דחיפות, בוצעו היום, עתידיות. */
-  function taskLists(el, uid, title) {
+  function taskLists(el, uid, title, viewOnly) {
     var mine = uid === S.me.id, o = myOpen(uid);
     var listKey = mine ? 'mine' : 'worker';
     el.appendChild(h('div', { class: 'sec' }, [
       h('span', { text: title }),
-      o.manual
+      viewOnly ? null : o.manual
         ? h('button', { class: 'link-btn', type: 'button', text: 'סדר אוטומטי', onclick: function () { queue(mine ? { type: 'autoOrder' } : { type: 'autoOrder', uid: uid }); toast('הרשימה חזרה לסדר אוטומטי'); } })
         : (o.list.length > 1 ? h('span', { class: 'hint', text: 'גוררים ≡ כדי לשנות סדר' }) : null)
     ]));
@@ -928,14 +932,14 @@
     }
     if (!o.list.length && !o.today.length) {
       el.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'big', text: '🎉' }),
-        o.future.length ? 'אין משימות להיום.' : 'אין משימות פתוחות.', h('br'), 'לחצו על + כדי להוסיף משימה.']));
+        o.future.length ? 'אין משימות להיום.' : 'אין משימות פתוחות.', viewOnly ? null : h('br'), viewOnly ? null : 'לחצו על + כדי להוסיף משימה.']));
     } else {
       PR.forEach(function (p) {
         var g = o.groups[p];
         if (!g.length) return;
         el.appendChild(h('div', { class: 'grp-h grp-' + p, text: PR_LABEL[p] + ' (' + g.length + ')' }));
         var ul = h('ul', { class: 'list grp', 'data-list': listKey, 'data-group': p, 'data-uid': mine ? null : uid });
-        g.forEach(function (t) { ul.appendChild(card(t, 'mine', g.length > 1)); });
+        g.forEach(function (t) { ul.appendChild(card(t, 'mine', g.length > 1 && !viewOnly)); });
         el.appendChild(ul);
       });
     }
@@ -961,9 +965,28 @@
   function notifyWho(uid) { var u = user(uid) || {}; return u.noApp ? (u.supervisorId ? uname(u.supervisorId) : '') : u.name || ''; }
   function canDone(t) { return t.assigneeId === S.me.id || manages(t.assigneeId); }
   function myWorkers() { return V.users.filter(function (u) { return u.active && u.noApp && (isMgr() || u.supervisorId === S.me.id); }).sort(byName); }
+  /** אני האחראי/ת הישיר/ה של העובד הזה (יש לו אפליקציה): רואה את משימות העבודה שלו, מגיב/ה ומקפיץ/ה. */
+  function leads(uid) { var u = user(uid); return !!u && !u.noApp && u.supervisorId === S.me.id; }
+  function myTeam() { return V.users.filter(function (u) { return u.active && !u.noApp && u.supervisorId === S.me.id && u.id !== S.me.id; }).sort(byName); }
   function viewWorker(el, uid) {
     var u = user(uid);
     if (!u) { el.appendChild(h('div', { class: 'empty', text: 'העובד לא נמצא.' })); return; }
+    if (!u.noApp) { // אני האחראי/ת הישיר/ה: צפייה במשימות העבודה שלו
+      el.appendChild(h('div', { class: 'worker-head' }, [
+        h('div', { class: 'wh-title', text: '👤 המשימות של ' + u.name }),
+        h('div', { class: 'small', text: 'את/ה האחראי/ת הישיר/ה: רואה את משימות העבודה (בלי משימות 🔒 אישיות), ויכול/ה להגיב ולהקפיץ. "בוצע" מסמן/ת ' + firstName(u.name) + '.' }),
+        h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', text: '+ משימה ל' + firstName(u.name), onclick: function () { openSheet(editSheet(null, { assigneeId: uid })); } }))
+      ]));
+      var pend = V.tasks.filter(function (t) { return t.assigneeId === uid && t.status === 'pending'; }).sort(function (a, b) { return (a.assignedAt || '').localeCompare(b.assignedAt || ''); });
+      if (pend.length) {
+        el.appendChild(h('div', { class: 'sec' }, [h('span', { text: '📌 ממתינות לאישור של ' + firstName(u.name) + ' (' + pend.length + ')' })]));
+        var pl = h('ul', { class: 'list', 'data-list': 'lead-pending' });
+        pend.forEach(function (t) { pl.appendChild(card(t, 'team', false)); });
+        el.appendChild(pl);
+      }
+      taskLists(el, uid, 'המשימות הפתוחות', true);
+      return;
+    }
     var sup = u.supervisorId ? (u.supervisorId === S.me.id ? 'אני' : uname(u.supervisorId)) : 'עוד לא נקבע';
     el.appendChild(h('div', { class: 'worker-head' }, [
       h('div', { class: 'wh-title', text: '🔧 המשימות של ' + u.name }),
@@ -1772,7 +1795,7 @@
         btn('', '↪ להעביר / לשלוח שוב', function () { openSheet(assignSheet(id)); });
         btn('secondary', 'לקחת לעצמי', function () { queue({ type: 'update', id: id, fields: { assigneeId: me } }); toast('המשימה עברה אליך'); });
       }
-      if (canEdit && !isAssignee && (t.status === 'pending' || t.status === 'open')) {
+      if ((canEdit || leads(t.assigneeId)) && !isAssignee && (t.status === 'pending' || t.status === 'open')) {
         btn('secondary', '🔔 הקפצה', function () { openSheet(nudgeSheet(id)); });
       }
       if (canEdit && isActive(t)) btn('secondary', '✎ עריכה', function () { openSheet(editSheet(id)); });
@@ -2726,6 +2749,7 @@
         det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי/ת: ' }), u.supervisorId ? uname(u.supervisorId) : 'עוד לא נקבע']));
       } else {
         det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'תפקיד: ' }), u.role === 'manager' ? 'מנהל (רואה את כל המשימות)' : 'עובד']));
+        if (u.supervisorId) det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'אחראי/ת ישיר/ה: ' }), uname(u.supervisorId) + ' (רואה את משימות העבודה)']));
         det.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'התראות: ' }), u.hasPush ? 'פעילות' : 'עוד לא הופעלו']));
       }
       var st = userStatus(u);
@@ -2865,16 +2889,24 @@
       V.users.filter(function (x) { return x.active && !x.noApp && (!u || x.id !== u.id); }).sort(byName).forEach(function (x) {
         supSel.appendChild(h('option', { value: x.id, text: x.id === S.me.id ? 'אני' : x.name }));
       });
-      supSel.value = u && u.supervisorId ? u.supervisorId : S.me.id;
-      var supBox = h('div', { class: 'sup-box' + (noApp ? '' : ' hidden') }, [
-        h('span', { class: 'lbl', style: 'margin-top:10px', text: 'מי אחראי/ת עליו (מסדר/ת לו משימות ומדפיס/ה)' }), supSel,
-        h('p', { class: 'small', text: 'לאחראי/ת ולמנהל תופיע לשונית "🔧" עם המשימות שלו וכפתור הדפסה. כל אחד יכול לתת לו משימה, והאחראי/ת מקבל/ת התראה.' })
-      ]);
+      supSel.insertBefore(h('option', { value: '', text: '— אין —' }), supSel.firstChild);
+      supSel.value = u && u.supervisorId ? u.supervisorId : (noApp ? S.me.id : '');
+      var supLbl = h('span', { class: 'lbl', style: 'margin-top:10px' });
+      var supHint = h('p', { class: 'small' });
+      var syncSup = function () {
+        supLbl.textContent = noApp ? 'מי אחראי/ת עליו (מסדר/ת לו משימות ומדפיס/ה)' : 'אחראי/ת ישיר/ה (לא חובה)';
+        supHint.textContent = noApp
+          ? 'לאחראי/ת ולמנהל תופיע לשונית "🔧" עם המשימות שלו וכפתור הדפסה. כל אחד יכול לתת לו משימה, והאחראי/ת מקבל/ת התראה.'
+          : 'האחראי/ת יקבל/תקבל לשונית "👤" ויראה/תראה את משימות העבודה של העובד (לא את המשימות ה-🔒 אישיות), עם אפשרות להגיב ולהקפיץ.';
+        if (noApp && !supSel.value) supSel.value = S.me.id;
+      };
+      var supBox = h('div', { class: 'sup-box' }, [supLbl, supSel, supHint]);
+      syncSup();
       var cb = h('input', { type: 'checkbox', id: 'noAppCb' });
       cb.checked = noApp;
       cb.addEventListener('change', function () {
         noApp = cb.checked;
-        supBox.classList.toggle('hidden', !noApp);
+        syncSup();
         if (roleBox) roleBox.classList.toggle('hidden', noApp);
         phoneLbl.textContent = noApp ? 'טלפון (לא חובה)' : 'טלפון נייד';
       });
@@ -2896,7 +2928,7 @@
       if (!self) {
         req.role = noApp ? 'employee' : role;
         req.noApp = noApp;
-        if (noApp) req.supervisorId = supSel.value;
+        req.supervisorId = supSel.value;
       }
       busy(btn, true, 'שומר…');
       onSave(req).then(function (r) {
@@ -3067,6 +3099,9 @@
     return function (el) {
       sheetHead(el, 'הגדרות');
       el.appendChild(h('div', { class: 'info' }, [h('span', { class: 'k', text: 'מחובר בתור: ' }), S.me.name + (isMgr() ? ' (מנהל)' : '')]));
+      var meU = user(S.me.id) || {};
+      if (meU.supervisorId && !meU.noApp) el.appendChild(h('div', { class: 'info lead-info' }, [h('span', { class: 'k', text: '👤 ' }),
+        uname(meU.supervisorId) + ' (אחראי/ת ישיר/ה) רואה את משימות העבודה שלך. משימות 🔒 אישיות – רק את/ה.']));
       var ib = installBox();
       if (ib) el.appendChild(ib);
       el.appendChild(pushBox());
